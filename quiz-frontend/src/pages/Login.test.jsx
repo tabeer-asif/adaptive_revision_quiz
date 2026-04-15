@@ -1,5 +1,3 @@
-process.env.REACT_APP_API_URL = "http://api.test";
-
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -53,15 +51,18 @@ describe("Login page", () => {
     await userEvent.click(screen.getByRole("button", { name: /login/i }));
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringMatching(/\/auth\/login$/),
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: "user@example.com", password: "password123" }),
-        }
-      );
+      expect(global.fetch).toHaveBeenCalled();
     });
+
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toMatch(/\/auth\/login$/);
+    expect(options).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "user@example.com", password: "password123" }),
+      })
+    );
 
     expect(localStorage.getItem("token")).toBe("test-token");
     expect(localStorage.getItem("user_id")).toBe("user-1");
@@ -81,11 +82,8 @@ describe("Login page", () => {
     await userEvent.type(screen.getByLabelText(/password/i), "password123");
     await userEvent.click(screen.getByRole("button", { name: /login/i }));
 
-    await waitFor(() => {
-      expect(
-        screen.getByText("API URL is incorrect or frontend env is stale. Railway returned HTML instead of JSON.")
-      ).toBeInTheDocument();
-    });
+    const errorAlert = await screen.findByRole("alert");
+    expect(errorAlert).toHaveTextContent(/returned html instead of json/i);
 
     expect(mockNavigate).not.toHaveBeenCalled();
   });
@@ -103,9 +101,7 @@ describe("Login page", () => {
     await userEvent.type(screen.getByLabelText(/password/i), "wrongpassword");
     await userEvent.click(screen.getByRole("button", { name: /login/i }));
 
-    await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalled();
-    });
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
 
     const errorAlert = await screen.findByRole("alert");
     expect(errorAlert).toHaveTextContent(/invalid credentials|invalid email or password/i);

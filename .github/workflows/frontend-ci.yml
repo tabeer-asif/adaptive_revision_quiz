@@ -36,4 +36,6 @@ jobs:
         run: npm run build
 
       - name: Run frontend tests if present
+        env:
+          REACT_APP_API_URL: http://api.test
         run: npm test -- --watchAll=false --passWithNoTests --runInBand
