@@ -39,6 +39,11 @@ function Login() {
       return;
     }
 
+    if (!API_URL) {
+      setError("Frontend is missing REACT_APP_API_URL. Set it in Railway and redeploy frontend.");
+      return;
+    }
+
     try {
       setLoading(true);
 
@@ -49,6 +54,11 @@ function Login() {
         },
         body: JSON.stringify({ email, password })
       });
+
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        throw new Error("API URL is incorrect or frontend env is stale. Railway returned HTML instead of JSON.");
+      }
 
       const data = await res.json();
 
