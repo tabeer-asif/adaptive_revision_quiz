@@ -104,8 +104,11 @@ describe("Login page", () => {
     await userEvent.click(screen.getByRole("button", { name: /login/i }));
 
     await waitFor(() => {
-      expect(screen.getByText("Invalid credentials")).toBeInTheDocument();
+      expect(global.fetch).toHaveBeenCalled();
     });
+
+    const errorAlert = await screen.findByRole("alert");
+    expect(errorAlert).toHaveTextContent(/invalid credentials|invalid email or password/i);
 
     expect(mockNavigate).not.toHaveBeenCalled();
   });

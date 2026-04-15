@@ -36,4 +36,4 @@ jobs:
         run: npm run build
 
       - name: Run frontend tests if present
-        run: npm test -- --watchAll=false --passWithNoTests
+        run: npm test -- --watchAll=false --passWithNoTests --runInBand
