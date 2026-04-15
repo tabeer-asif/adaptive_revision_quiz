@@ -1,0 +1,42 @@
+name: Backend CI
+
+on:
+  push:
+    paths:
+      - quiz_backend/**
+      - .github/workflows/backend-ci.yml
+  pull_request:
+    paths:
+      - quiz_backend/**
+      - .github/workflows/backend-ci.yml
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: quiz_backend
+
+    env:
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_SERVICE_KEY: dummy_service_key
+      SUPABASE_ANON_KEY: dummy_anon_key
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        run: python -m pytest --cov=app --cov-report=term-missing
