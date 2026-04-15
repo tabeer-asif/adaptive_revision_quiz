@@ -6,6 +6,12 @@
 __pycache__/
 *.py[cod]
 
+# Python test/coverage artifacts
+/quiz_backend/.coverage
+/quiz_backend/.coverage.*
+/quiz_backend/.pytest_cache/
+/quiz_backend/htmlcov/
+
 /quiz-frontend/node_modules
 /quiz-frontend/.pnp
 /quiz-frontend/.pnp.js
@@ -17,6 +23,7 @@ __pycache__/
 /quiz-frontend/build
 
 # misc
+.DS_Store
 /quiz-frontend/.DS_Store
 /quiz-frontend/.env.local
 /quiz-frontend/.env.development.local
