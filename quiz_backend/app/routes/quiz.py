@@ -235,7 +235,7 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
 
         theta_new = update_theta_2pl(theta, a, b, irt_signal, learning_rate * 0.5)
     
-    else:
+    else:  # pragma: no cover - unreachable due to earlier type guard
         # Fallback — should never reach here given type validation above
         theta_new = theta  # no update, safe default
 
