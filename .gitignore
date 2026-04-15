@@ -1,1 +1,28 @@
 /quiz_backend/.env
+/quiz_backend/venv/
+/quiz-frontend/.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+/quiz-frontend/node_modules
+/quiz-frontend/.pnp
+/quiz-frontend/.pnp.js
+
+# testing
+/quiz-frontend/coverage
+
+# production
+/quiz-frontend/build
+
+# misc
+/quiz-frontend/.DS_Store
+/quiz-frontend/.env.local
+/quiz-frontend/.env.development.local
+/quiz-frontend/.env.test.local
+/quiz-frontend/.env.production.local
+
+/quiz-frontend/npm-debug.log*
+/quiz-frontend/yarn-debug.log*
+/quiz-frontend/yarn-error.log*
