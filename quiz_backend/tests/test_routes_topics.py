@@ -6,7 +6,13 @@ from app.schemas.quiz import CreateTopicRequest
 from tests.conftest import StubSupabaseDB, FakeUser
 
 
+"""Route tests for topic listing and topic creation behavior."""
+
+# Convention: tests below follow Arrange / Act / Assert flow.
+
+
 def test_get_topics_success_and_error(monkeypatch):
+    # Topics endpoint should return rows and map backend errors to 500.
     db = StubSupabaseDB({("topics", "select"): [{"data": [{"id": 1, "name": "Math"}]}]})
     monkeypatch.setattr(topics_routes, "supabase_db", db)
 
@@ -24,6 +30,7 @@ def test_get_topics_success_and_error(monkeypatch):
 
 
 def test_create_topic_paths(monkeypatch):
+    # Covers create success, duplicate name, empty name, and insert failure.
     db = StubSupabaseDB({
         ("topics", "select"): [
             {"data": []},

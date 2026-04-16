@@ -1,9 +1,9 @@
-process.env.REACT_APP_API_URL = "http://api.test";
-
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import Register from "./Register";
+
+process.env.REACT_APP_API_URL = "http://api.test";
 
 const mockNavigate = jest.fn();
 

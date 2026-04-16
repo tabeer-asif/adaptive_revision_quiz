@@ -4,12 +4,19 @@ from fastapi import HTTPException
 from app.utils import quiz_validation as qv
 
 
+"""Unit tests for request-answer validation helpers in quiz flow."""
+
+# Convention: tests below follow Arrange / Act / Assert flow.
+
+
 class Resp:
+    # Minimal response object matching `question_resp.data` shape.
     def __init__(self, data):
         self.data = data
 
 
 def test_validate_question_exists():
+    # Missing question should raise 404; existing question should pass.
     with pytest.raises(HTTPException) as exc:
         qv.validate_question_exists(Resp([]))
     assert exc.value.status_code == 404
@@ -18,6 +25,7 @@ def test_validate_question_exists():
 
 
 def test_validate_answer_submitted():
+    # Empty/blank answer forms should be rejected consistently.
     for invalid in [None, "", [], {}]:
         with pytest.raises(HTTPException):
             qv.validate_answer_submitted(invalid)
@@ -26,6 +34,7 @@ def test_validate_answer_submitted():
 
 
 def test_mcq_and_multi_mcq_selection_validation():
+    # Option-key validation across MCQ and MULTI_MCQ answer formats.
     assert qv.validate_mcq_selection(" A ", {"A": "One"}) == "A"
 
     with pytest.raises(HTTPException):
@@ -51,6 +60,7 @@ def test_mcq_and_multi_mcq_selection_validation():
 
 
 def test_multi_mcq_db_and_numeric_validation():
+    # Numeric and stored-answer normalization/validation behavior.
     assert qv.validate_multi_mcq_db_answer(["A", "A", "B"]) == ["A", "B"]
 
     with pytest.raises(HTTPException):
@@ -69,6 +79,7 @@ def test_multi_mcq_db_and_numeric_validation():
 
 
 def test_short_and_open_text_validation():
+    # Text and self-rating validation for SHORT/OPEN question types.
     assert qv.validate_short_text(" Hello ") == "hello"
     with pytest.raises(HTTPException):
         qv.validate_short_text(5)

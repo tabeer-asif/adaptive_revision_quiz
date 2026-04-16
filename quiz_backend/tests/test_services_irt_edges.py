@@ -1,7 +1,13 @@
 from app.services import irt
 
 
+"""Edge-case tests for numeric overflow and fallback behavior in IRT helpers."""
+
+# Convention: tests below follow Arrange / Act / Assert flow.
+
+
 def test_irt_overflow_and_defaults(monkeypatch):
+    # Overflow paths should return bounded probability fallbacks.
     def overflow(_):
         raise OverflowError()
 
@@ -15,6 +21,7 @@ def test_irt_overflow_and_defaults(monkeypatch):
 
 
 def test_update_theta_3pl_with_none_c_and_grm_overflow(monkeypatch):
+    # `c=None` should use default guessing; GRM overflow path should still return probabilities.
     out = irt.update_theta_3pl(theta=0.0, a=1.0, b=0.0, c=None, response=1)
     assert out > 0
 
@@ -27,4 +34,5 @@ def test_update_theta_3pl_with_none_c_and_grm_overflow(monkeypatch):
 
 
 def test_score_multi_mcq_zero_total():
+    # Empty correct-set path should return 0 score, not divide-by-zero.
     assert irt.score_multi_mcq({"A"}, set()) == 0.0

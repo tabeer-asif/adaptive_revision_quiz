@@ -1,9 +1,9 @@
-process.env.REACT_APP_API_URL = "http://api.test";
-
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import Questions from "./Questions";
+
+process.env.REACT_APP_API_URL = "http://api.test";
 
 jest.mock("react-router-dom", () => ({
   ...jest.requireActual("react-router-dom"),
@@ -75,7 +75,7 @@ describe("Questions page", () => {
   it("displays question counts (Total, Due, New)", async () => {
     setupFetch();
     renderQuestions();
-    await waitFor(() => screen.getByText("What is 2+2?"));
+    await screen.findByText("What is 2+2?");
     expect(screen.getByText(/Total: 2/)).toBeInTheDocument();
     expect(screen.getByText(/Due: 1/)).toBeInTheDocument();
     expect(screen.getByText(/New: 1/)).toBeInTheDocument();
@@ -84,7 +84,7 @@ describe("Questions page", () => {
   it("shows 'Create New Question' button", async () => {
     setupFetch();
     renderQuestions();
-    await waitFor(() => screen.getByText("What is 2+2?"));
+    await screen.findByText("What is 2+2?");
     expect(
       screen.getByRole("button", { name: /Create New Question/i })
     ).toBeInTheDocument();
@@ -93,7 +93,7 @@ describe("Questions page", () => {
   it("opens create drawer when Create New Question is clicked", async () => {
     setupFetch();
     renderQuestions();
-    await waitFor(() => screen.getByText("What is 2+2?"));
+    await screen.findByText("What is 2+2?");
     await userEvent.click(screen.getByRole("button", { name: /Create New Question/i }));
     expect(screen.getByText(/Fill in the question details/i)).toBeInTheDocument();
   });
@@ -101,7 +101,7 @@ describe("Questions page", () => {
   it("shows and hides answers when Show/Hide Answers is toggled", async () => {
     setupFetch();
     renderQuestions();
-    await waitFor(() => screen.getByText("What is 2+2?"));
+    await screen.findByText("What is 2+2?");
 
     const toggleBtn = screen.getByRole("button", { name: /Show Answers/i });
     await userEvent.click(toggleBtn);
@@ -113,13 +113,65 @@ describe("Questions page", () => {
   it("filters questions by search text", async () => {
     setupFetch();
     renderQuestions();
-    await waitFor(() => screen.getByText("What is 2+2?"));
+    await screen.findByText("What is 2+2?");
 
     const searchInput = screen.getByLabelText(/Search Questions/i);
     await userEvent.type(searchInput, "primary");
 
     expect(screen.queryByText("What is 2+2?")).not.toBeInTheDocument();
     expect(screen.getByText("Name a primary colour.")).toBeInTheDocument();
+  });
+
+  it("uploads an image and shows a preview in the drawer", async () => {
+    setupFetch();
+    renderQuestions();
+    await screen.findByText("What is 2+2?");
+
+    // open drawer
+    await userEvent.click(screen.getByRole("button", { name: /Create New Question/i }));
+    expect(screen.getByText(/Fill in the question details/i)).toBeInTheDocument();
+
+    // mock upload endpoint
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ image_url: "https://cdn.example/img.png", filename: "u1/uuid.png" }),
+    });
+
+    const file = new File(["img"], "photo.png", { type: "image/png" });
+    const input = document.querySelector('input[type="file"]');
+    await userEvent.upload(input, file);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringMatching(/\/uploads\/question-image$/),
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByAltText("Question preview")).toBeInTheDocument();
+    });
+  });
+
+  it("shows form error when image upload fails", async () => {
+    setupFetch();
+    renderQuestions();
+    await screen.findByText("What is 2+2?");
+
+    await userEvent.click(screen.getByRole("button", { name: /Create New Question/i }));
+
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ detail: "File too large" }),
+    });
+
+    const file = new File(["img"], "big.png", { type: "image/png" });
+    const input = document.querySelector('input[type="file"]');
+    await userEvent.upload(input, file);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("File too large").length).toBeGreaterThan(0);
+    });
   });
 
   it("calls delete API and refreshes list when Delete is confirmed", async () => {
@@ -133,7 +185,7 @@ describe("Questions page", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => TOPICS });
 
     renderQuestions();
-    await waitFor(() => screen.getAllByRole("button", { name: /Delete/ }));
+    await screen.findAllByRole("button", { name: /Delete/ });
 
     const deleteButtons = screen.getAllByRole("button", { name: /^Delete$/ });
     await userEvent.click(deleteButtons[0]);

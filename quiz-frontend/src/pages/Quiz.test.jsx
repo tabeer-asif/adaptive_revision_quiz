@@ -1,9 +1,9 @@
-process.env.REACT_APP_API_URL = "http://api.test";
-
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import Quiz from "./Quiz";
+
+process.env.REACT_APP_API_URL = "http://api.test";
 
 const mockNavigate = jest.fn();
 
@@ -57,7 +57,7 @@ const SHORT_QUESTION = {
 /** Mock two-call init sequence: due/count then irt */
 function mockInitFetch(dueCount, question) {
   global.fetch = jest.fn()
-    .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: dueCount }) })
+    .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: dueCount, total_available: dueCount }) })
     .mockResolvedValueOnce({ ok: true, json: async () => question });
 }
 
@@ -86,7 +86,7 @@ describe("Quiz page", () => {
     localStorage.setItem("token", "tok");
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ due_count: 0 }),
+      json: async () => ({ due_count: 0, total_available: 0 }),
     });
 
     renderQuiz();
@@ -141,12 +141,35 @@ describe("Quiz page", () => {
     expect(screen.getByLabelText(/Your answer/i)).toBeInTheDocument();
   });
 
+  it("renders question image when image_url is present", async () => {
+    localStorage.setItem("token", "tok");
+    const question = { ...MCQ_QUESTION, image_url: "https://cdn.example/img.png" };
+    mockInitFetch(5, question);
+
+    renderQuiz();
+    await screen.findByText("What is 2 + 2?");
+
+    const img = screen.getByAltText("Question illustration");
+    expect(img).toBeInTheDocument();
+    expect(img).toHaveAttribute("src", "https://cdn.example/img.png");
+  });
+
+  it("does not render image element when image_url is absent", async () => {
+    localStorage.setItem("token", "tok");
+    mockInitFetch(5, MCQ_QUESTION);
+
+    renderQuiz();
+    await screen.findByText("What is 2 + 2?");
+
+    expect(screen.queryByAltText("Question illustration")).not.toBeInTheDocument();
+  });
+
   it("Submit button is disabled until an MCQ option is selected", async () => {
     localStorage.setItem("token", "tok");
     mockInitFetch(5, MCQ_QUESTION);
 
     renderQuiz();
-    await waitFor(() => screen.getByText("What is 2 + 2?"));
+    await screen.findByText("What is 2 + 2?");
 
     expect(screen.getByRole("button", { name: /Submit/i })).toBeDisabled();
     await userEvent.click(screen.getByLabelText("B: 4"));
@@ -157,17 +180,17 @@ describe("Quiz page", () => {
     localStorage.setItem("token", "tok");
     mockInitFetch(5, MCQ_QUESTION);
     global.fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 5 }) })  // next due count check
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 5, total_available: 5 }) })  // next due count check
       .mockResolvedValueOnce({ ok: true, json: async () => MCQ_QUESTION });        // next question
 
     // Re-setup mocks with submit in between
     global.fetch = jest.fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 5 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 5, total_available: 5 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => MCQ_QUESTION })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ correct: true }) });
 
     renderQuiz();
-    await waitFor(() => screen.getByText("What is 2 + 2?"));
+    await screen.findByText("What is 2 + 2?"); 
 
     await userEvent.click(screen.getByLabelText("B: 4"));
     await userEvent.click(screen.getByRole("button", { name: /Submit/i }));
@@ -181,12 +204,12 @@ describe("Quiz page", () => {
   it("shows wrong feedback on incorrect answer", async () => {
     localStorage.setItem("token", "tok");
     global.fetch = jest.fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 3 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 3, total_available: 3 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => MCQ_QUESTION })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ correct: false }) });
 
     renderQuiz();
-    await waitFor(() => screen.getByText("What is 2 + 2?"));
+    await screen.findByText("What is 2 + 2?");
 
     await userEvent.click(screen.getByLabelText("A: 3"));
     await userEvent.click(screen.getByRole("button", { name: /Submit/i }));
@@ -199,17 +222,17 @@ describe("Quiz page", () => {
   it("navigates to results when no due questions remain after Next", async () => {
     localStorage.setItem("token", "tok");
     global.fetch = jest.fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 1 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 1, total_available: 1 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => MCQ_QUESTION })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ correct: true }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 0 }) }); // no more due
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 0, total_available: 0 }) }); // no more due
 
     renderQuiz();
-    await waitFor(() => screen.getByText("What is 2 + 2?"));
+    await screen.findByText("What is 2 + 2?");
 
     await userEvent.click(screen.getByLabelText("B: 4"));
     await userEvent.click(screen.getByRole("button", { name: /Submit/i }));
-    await waitFor(() => screen.getByRole("button", { name: /Next/i }));
+    await screen.findByRole("button", { name: /Next/i });
     await userEvent.click(screen.getByRole("button", { name: /Next/i }));
 
     await waitFor(() => {

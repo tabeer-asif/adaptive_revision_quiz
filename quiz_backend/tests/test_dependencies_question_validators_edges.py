@@ -5,7 +5,13 @@ from app.dependencies import question_validators as qv
 from app.schemas.questions import CreateQuestionRequest
 
 
+"""Edge-case coverage for every validator guard branch."""
+
+# Convention: tests below follow Arrange / Act / Assert flow.
+
+
 def _base_payload(q_type, **kwargs):
+    # Helper to keep negative-path tests concise.
     base = {
         "topic_id": 1,
         "text": "Question",
@@ -17,6 +23,7 @@ def _base_payload(q_type, **kwargs):
 
 
 def test_internal_text_options_and_key_helpers():
+    # Internal helper functions should reject malformed text/options/keys.
     with pytest.raises(HTTPException):
         qv._require_text(" ")
 
@@ -33,7 +40,18 @@ def test_internal_text_options_and_key_helpers():
         qv._ensure_keys_exist(["X"], {"A": "One"}, "MCQ")
 
 
+def test_internal_image_url_helper():
+    # image_url helper accepts None/empty/valid URLs and rejects malformed values.
+    qv._validate_image_url(None)
+    qv._validate_image_url("")
+    qv._validate_image_url("https://cdn.example/img.png")
+
+    with pytest.raises(HTTPException):
+        qv._validate_image_url("invalid-url")
+
+
 def test_validate_mcq_negative_paths(monkeypatch):
+    # MCQ-specific invalid combinations and malformed answers.
     monkeypatch.setattr(qv, "check_topic_id", lambda _tid: None)
 
     with pytest.raises(HTTPException):
@@ -50,6 +68,7 @@ def test_validate_mcq_negative_paths(monkeypatch):
 
 
 def test_validate_multi_mcq_negative_paths(monkeypatch):
+    # MULTI_MCQ-specific invalid combinations and malformed answers.
     monkeypatch.setattr(qv, "check_topic_id", lambda _tid: None)
 
     with pytest.raises(HTTPException):
@@ -75,6 +94,7 @@ def test_validate_multi_mcq_negative_paths(monkeypatch):
 
 
 def test_validate_numeric_short_open_negative_paths(monkeypatch):
+    # Remaining negative branches for NUMERIC, SHORT, and OPEN.
     monkeypatch.setattr(qv, "check_topic_id", lambda _tid: None)
 
     with pytest.raises(HTTPException):

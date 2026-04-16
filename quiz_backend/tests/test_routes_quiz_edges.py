@@ -6,7 +6,13 @@ from app.schemas.quiz import SubmitAnswerRequest
 from tests.conftest import StubSupabaseDB, FakeUser
 
 
+"""Branch-completion tests for submit-answer across question types."""
+
+# Convention: tests below follow Arrange / Act / Assert flow.
+
+
 class FakeCard:
+    # Minimal card object shape used by the submit flow.
     def __init__(self, **kwargs):
         now = datetime.now(timezone.utc)
         self.stability = kwargs.get("stability", 1.0)
@@ -18,12 +24,14 @@ class FakeCard:
 
 
 class FakeScheduler:
+    # Deterministic scheduler to avoid time/interval variability in tests.
     def review_card(self, card, rating):
         card.due = datetime.now(timezone.utc) + timedelta(days=2)
         return card, 2
 
 
 def _patch_common(monkeypatch):
+    # Shared patches for dependencies that are irrelevant to branch intent.
     monkeypatch.setattr(quiz_routes, "scheduler", FakeScheduler())
     monkeypatch.setattr(quiz_routes, "Card", FakeCard)
     monkeypatch.setattr(quiz_routes, "State", lambda v: SimpleNamespace(value=v))
@@ -32,6 +40,7 @@ def _patch_common(monkeypatch):
 
 
 def test_submit_answer_multi_mcq_threshold_paths(monkeypatch):
+    # Covers MULTI_MCQ branches: 2PL fallback and GRM category transitions.
     _patch_common(monkeypatch)
     monkeypatch.setattr(quiz_routes, "validate_multi_mcq_selection", lambda selected, options: ["A", "B"])
     monkeypatch.setattr(quiz_routes, "validate_multi_mcq_db_answer", lambda ans: ["A", "C"])
@@ -134,6 +143,7 @@ def test_submit_answer_multi_mcq_threshold_paths(monkeypatch):
 
 
 def test_submit_answer_numeric_short_open_and_existing_card(monkeypatch):
+    # Covers NUMERIC/SHORT/OPEN branches plus existing card/theta paths.
     _patch_common(monkeypatch)
 
     monkeypatch.setattr(quiz_routes, "validate_numeric_selection", lambda s: 10.0)

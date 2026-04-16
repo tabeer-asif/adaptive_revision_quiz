@@ -3,6 +3,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
+"""Shared test doubles used across backend tests.
+
+These stubs let route/service tests run without real Supabase network calls.
+"""
+
+
 # Allow running `pytest` from either repo root or quiz_backend root.
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
@@ -15,6 +21,7 @@ class StubResponse(SimpleNamespace):
 
 
 class StubQuery:
+    # Mimics the fluent Supabase query builder API used in app code.
     def __init__(self, db, table_name):
         self._db = db
         self._table = table_name
@@ -72,6 +79,7 @@ class StubQuery:
 
 
 class StubSupabaseDB:
+    # `scripted` maps (table, operation) -> queue of responses.
     def __init__(self, scripted=None):
         self.scripted = scripted or {}
         self.last_payloads = {}
@@ -99,11 +107,13 @@ class StubSupabaseDB:
 
 
 class FakeUser:
+    # Minimal user object shape expected by route dependencies.
     def __init__(self, user_id):
         self.id = user_id
 
 
 class FakeAuthModule:
+    # Configurable fake for Supabase auth methods and error paths.
     def __init__(self):
         self.sign_up_result = None
         self.sign_in_result = None
@@ -129,5 +139,6 @@ class FakeAuthModule:
 
 
 class FakeSupabaseAuthClient:
+    # Wraps fake auth module in same shape as real Supabase client.
     def __init__(self, auth_module):
         self.auth = auth_module

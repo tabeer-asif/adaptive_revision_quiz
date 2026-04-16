@@ -6,7 +6,13 @@ from app.schemas.questions import CreateQuestionRequest, BulkDeleteRequest
 from tests.conftest import StubSupabaseDB, FakeUser
 
 
+"""Main route tests for question CRUD, overview, and topic-based selection."""
+
+# Convention: tests below follow Arrange / Act / Assert flow.
+
+
 def test_helpers_and_answers_differ():
+    # Basic helper behavior used by create/update flows.
     assert q_routes.get_irt_defaults(1)["irt_b"] == -1.0
     assert q_routes.get_irt_defaults(4)["irt_b"] == 1.0
     assert q_routes.answers_differ({"a": 1}, {"a": 1}) is False
@@ -14,6 +20,7 @@ def test_helpers_and_answers_differ():
 
 
 def test_create_question_success(monkeypatch):
+    # Valid create request should persist and return inserted question.
     monkeypatch.setitem(q_routes.VALIDATORS, "MCQ", lambda payload: None)
     monkeypatch.setattr(q_routes, "default_grm_thresholds", lambda b: [b - 0.5, b + 0.5])
 
@@ -33,6 +40,7 @@ def test_create_question_success(monkeypatch):
 
 
 def test_create_question_invalid_type(monkeypatch):
+    # Unknown/unsupported type should fail early with 400.
     payload = CreateQuestionRequest(topic_id=1, text="Q", type="OPEN", answer="x")
     monkeypatch.setitem(q_routes.VALIDATORS, "OPEN", lambda payload: None)
     q_routes.VALIDATORS.pop("OPEN")
@@ -42,6 +50,7 @@ def test_create_question_invalid_type(monkeypatch):
 
 
 def test_update_question_paths(monkeypatch):
+    # Covers successful update and forbidden update by non-owner.
     monkeypatch.setitem(q_routes.VALIDATORS, "MCQ", lambda payload: None)
     monkeypatch.setattr(q_routes, "default_grm_thresholds", lambda b: [b - 0.5, b + 0.5])
 
@@ -72,6 +81,7 @@ def test_update_question_paths(monkeypatch):
 
 
 def test_get_next_question_by_topics(monkeypatch):
+    # Selection endpoint should strip answer before returning chosen question.
     db = StubSupabaseDB({
         ("user_topic_theta", "select"): [{"data": [{"topic_id": 1, "theta": 0.2, "is_calibrated": True}]}],
         ("fsrs_cards", "select"): [
@@ -90,6 +100,7 @@ def test_get_next_question_by_topics(monkeypatch):
 
 
 def test_overview_due_and_delete_flows(monkeypatch):
+    # Covers overview aggregation, due/new counts, and delete endpoints.
     db = StubSupabaseDB({
         ("questions", "select"): [
             {"data": [{"id": 1, "topic_id": 9, "text": "Q", "type": "MCQ", "difficulty": 1, "created_by": "u1", "answer": "A"}]},
@@ -127,6 +138,7 @@ def test_overview_due_and_delete_flows(monkeypatch):
 
 
 def test_delete_questions_errors(monkeypatch):
+    # Bulk delete should reject empty, missing, and non-owned question sets.
     with pytest.raises(HTTPException):
         q_routes.delete_questions(BulkDeleteRequest(ids=[]), user=FakeUser("u1"))
 

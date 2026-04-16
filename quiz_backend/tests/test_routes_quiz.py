@@ -9,7 +9,13 @@ from app.schemas.quiz import SubmitAnswerRequest
 from tests.conftest import StubSupabaseDB, FakeUser
 
 
+"""Route tests for quiz answer submission endpoint."""
+
+# Convention: tests below follow Arrange / Act / Assert flow.
+
+
 class FakeCard:
+    # Minimal card object shape used by the submit flow.
     def __init__(self, **kwargs):
         now = datetime.now(timezone.utc)
         self.stability = kwargs.get("stability", 1.0)
@@ -21,12 +27,14 @@ class FakeCard:
 
 
 class FakeScheduler:
+    # Deterministic scheduler to avoid time/interval variability in tests.
     def review_card(self, card, rating):
         card.due = datetime.now(timezone.utc) + timedelta(days=2)
         return card, 2
 
 
 def test_submit_answer_mcq_success(monkeypatch):
+    # End-to-end happy path for MCQ submission and persistence updates.
     db = StubSupabaseDB({
         ("questions", "select"): [
             {"data": [{
@@ -63,6 +71,7 @@ def test_submit_answer_mcq_success(monkeypatch):
 
 
 def test_submit_answer_question_not_found(monkeypatch):
+    # Missing question should raise 404.
     db = StubSupabaseDB({("questions", "select"): [{"data": []}]})
     monkeypatch.setattr(quiz_routes, "supabase_db", db)
 
@@ -73,6 +82,7 @@ def test_submit_answer_question_not_found(monkeypatch):
 
 
 def test_submit_answer_unsupported_type(monkeypatch):
+    # Unsupported question type should raise 400.
     db = StubSupabaseDB({
         ("questions", "select"): [
             {"data": [{

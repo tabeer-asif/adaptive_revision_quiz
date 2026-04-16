@@ -1,9 +1,9 @@
-process.env.REACT_APP_API_URL = "http://api.test";
-
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import Home from "./Home";
+
+process.env.REACT_APP_API_URL = "http://api.test";
 
 const mockNavigate = jest.fn();
 
@@ -62,7 +62,7 @@ describe("Home page", () => {
     global.fetch.mockResolvedValue({ ok: true, json: async () => TOPICS });
 
     renderHome();
-    await waitFor(() => screen.getByLabelText(/Topics/i));
+    await screen.findByLabelText(/Topics/i);
 
     expect(screen.getByRole("button", { name: /Start Quiz/i })).toBeDisabled();
   });
@@ -72,7 +72,7 @@ describe("Home page", () => {
     global.fetch.mockResolvedValue({ ok: true, json: async () => TOPICS });
 
     renderHome();
-    await waitFor(() => screen.getByRole("button", { name: /View Question Database/i }));
+    await screen.findByRole("button", { name: /View Question Database/i });
 
     await userEvent.click(screen.getByRole("button", { name: /View Question Database/i }));
     expect(mockNavigate).toHaveBeenCalledWith("/questions");
@@ -84,7 +84,7 @@ describe("Home page", () => {
     global.fetch.mockResolvedValue({ ok: true, json: async () => TOPICS });
 
     renderHome();
-    await waitFor(() => screen.getByRole("button", { name: /Logout/i }));
+    await screen.findByRole("button", { name: /Logout/i });
 
     await userEvent.click(screen.getByRole("button", { name: /Logout/i }));
 

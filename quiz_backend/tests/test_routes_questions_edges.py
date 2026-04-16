@@ -6,11 +6,18 @@ from app.schemas.questions import CreateQuestionRequest
 from tests.conftest import StubSupabaseDB, FakeUser
 
 
+"""Edge-case and branch-completion tests for question routes."""
+
+# Convention: tests below follow Arrange / Act / Assert flow.
+
+
 def test_answers_differ_non_json_fallback():
+    # Non-JSON-serializable payloads should use fallback comparison branch.
     assert q_routes.answers_differ({1, 2}, {1, 2}) is False
 
 
 def test_create_question_multi_mcq_paths_and_insert_fail(monkeypatch):
+    # Covers auto/sorted threshold handling and insert failure path.
     monkeypatch.setitem(q_routes.VALIDATORS, "MULTI_MCQ", lambda payload: None)
     monkeypatch.setattr(q_routes, "default_grm_thresholds", lambda b: [b - 0.5, b + 0.5])
 
@@ -45,6 +52,7 @@ def test_create_question_multi_mcq_paths_and_insert_fail(monkeypatch):
 
 
 def test_update_question_extra_branches(monkeypatch):
+    # Covers invalid type and missing-question update branches.
     monkeypatch.setitem(q_routes.VALIDATORS, "MULTI_MCQ", lambda payload: None)
     monkeypatch.setattr(q_routes, "default_grm_thresholds", lambda b: [b - 0.5, b + 0.5])
 
@@ -70,6 +78,7 @@ def test_update_question_extra_branches(monkeypatch):
 
 
 def test_update_question_multi_mcq_sorted_thresholds(monkeypatch):
+    # Explicit thresholds should be sorted before update payload is saved.
     monkeypatch.setitem(q_routes.VALIDATORS, "MULTI_MCQ", lambda payload: None)
 
     payload = CreateQuestionRequest(
@@ -94,6 +103,7 @@ def test_update_question_multi_mcq_sorted_thresholds(monkeypatch):
 
 
 def test_update_question_multi_mcq_auto_thresholds(monkeypatch):
+    # Missing thresholds should be generated from default b value.
     monkeypatch.setitem(q_routes.VALIDATORS, "MULTI_MCQ", lambda payload: None)
     monkeypatch.setattr(q_routes, "default_grm_thresholds", lambda b: [b - 0.5, b + 0.5])
 
@@ -129,6 +139,7 @@ def test_update_question_multi_mcq_auto_thresholds(monkeypatch):
 
 
 def test_get_next_question_by_topics_not_found_cases(monkeypatch):
+    # Endpoint should 404 when pool is empty or no best question is selected.
     req = type("Req", (), {"topics": [1]})
 
     db_none = StubSupabaseDB({
@@ -154,6 +165,7 @@ def test_get_next_question_by_topics_not_found_cases(monkeypatch):
 
 
 def test_delete_all_and_delete_one_error_paths(monkeypatch):
+    # Covers no-op delete-all and single-delete ownership/not-found failures.
     db_all_none = StubSupabaseDB({("questions", "select"): [{"data": []}]})
     monkeypatch.setattr(q_routes, "supabase_db", db_all_none)
     out = q_routes.delete_all_questions(user=FakeUser("u1"))

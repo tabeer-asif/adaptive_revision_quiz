@@ -1,4 +1,5 @@
 from fastapi import HTTPException
+from urllib.parse import urlparse
 from app.supabase_client import supabase_db
 from app.schemas.questions import CreateQuestionRequest
 
@@ -38,11 +39,25 @@ def _ensure_keys_exist(keys, options, question_type: str):
             400,
             f"{question_type} answer keys must exist in options: {invalid_keys}",
         )
+
+
+def _validate_image_url(image_url):
+    # Allow None/empty so update flows can clear an existing image.
+    if image_url is None or image_url == "":
+        return
+
+    if not isinstance(image_url, str):
+        raise HTTPException(400, "image_url must be a string")
+
+    parsed = urlparse(image_url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(400, "image_url must be a valid http/https URL")
     
 
 def validate_mcq(data: CreateQuestionRequest):
     check_topic_id(data.topic_id)
     _require_text(data.text)
+    _validate_image_url(data.image_url)
     if data.answer is None:
         raise HTTPException(400, "Answer is required for MCQ")
     _require_mcq_options(data.options)
@@ -62,6 +77,7 @@ def validate_mcq(data: CreateQuestionRequest):
 def validate_multi_mcq(data: CreateQuestionRequest):
     check_topic_id(data.topic_id)
     _require_text(data.text)
+    _validate_image_url(data.image_url)
     if data.answer is None:
         raise HTTPException(400, "Answer is required for MULTI_MCQ")
     _require_mcq_options(data.options)
@@ -95,6 +111,7 @@ def validate_numeric(data: CreateQuestionRequest):
     check_topic_id(data.topic_id)
 
     _require_text(data.text)
+    _validate_image_url(data.image_url)
     if data.options is not None:
         raise HTTPException(400, "NUMERIC should not have options")
     if data.answer is None:
@@ -113,6 +130,7 @@ def validate_numeric(data: CreateQuestionRequest):
 def validate_short(data: CreateQuestionRequest):
     check_topic_id(data.topic_id)
     _require_text(data.text)
+    _validate_image_url(data.image_url)
     if data.options is not None:
         raise HTTPException(400, "SHORT should not have options")
     if data.answer is None:
@@ -132,6 +150,7 @@ def validate_open(data: CreateQuestionRequest):
     # OPEN is flexible — optional model answer allowed
     check_topic_id(data.topic_id)
     _require_text(data.text)
+    _validate_image_url(data.image_url)
     if data.options is not None:
         raise HTTPException(400, "OPEN should not have options")
     if data.tolerance is not None:

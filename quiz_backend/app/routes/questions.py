@@ -23,6 +23,7 @@ def get_irt_defaults(difficulty: int) -> dict:
 router = APIRouter()
 REVIEW_LIMIT = 1000
 NEW_LIMIT = 20
+UPLOAD_BUCKET = "question-images"
 
 def answers_differ(a, b) -> bool:
     # Normalise both to JSON strings for reliable comparison
@@ -30,6 +31,34 @@ def answers_differ(a, b) -> bool:
         return json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True)
     except Exception:
         return a != b
+
+
+def _extract_storage_path(image_url: str) -> str | None:
+    if not image_url:
+        return None
+
+    marker = f"/{UPLOAD_BUCKET}/"
+    if marker not in image_url:
+        return None
+
+    path = image_url.split(marker, 1)[1]
+    return path.split("?", 1)[0] if path else None
+
+
+def _cleanup_uploaded_images(image_urls: list[str]) -> None:
+    if not hasattr(supabase_db, "storage"):
+        return
+
+    paths = [_extract_storage_path(url) for url in image_urls if url]
+    paths = [path for path in paths if path]
+    if not paths:
+        return
+
+    try:
+        supabase_db.storage.from_(UPLOAD_BUCKET).remove(paths)
+    except Exception:
+        # Non-fatal; DB delete should still proceed.
+        pass
 
 @router.post("/questions/create")
 def create_question(payload: CreateQuestionRequest, user=Depends(get_current_user)):
@@ -71,7 +100,8 @@ def create_question(payload: CreateQuestionRequest, user=Depends(get_current_use
         "n_responses": 0,
         "n_correct": 0,
         "is_calibrated": False,
-        "created_by": str(user.id)
+        "created_by": str(user.id),
+        "image_url": payload.image_url or None
     }
 
     # 4. Insert into DB
@@ -135,6 +165,7 @@ def update_question(question_id: int, payload: CreateQuestionRequest, user=Depen
         "irt_thresholds": irt_thresholds,
         "tolerance": payload.tolerance,
         "keywords": payload.keywords,
+        "image_url": payload.image_url or None,
     }
 
     # Reset calibration stats only if the answer itself changed — prior data is now invalid
@@ -148,7 +179,7 @@ def update_question(question_id: int, payload: CreateQuestionRequest, user=Depen
             .delete() \
             .eq("question_id", question_id) \
             .execute()
-    
+        
     res = supabase_db.table("questions") \
         .update(question_data) \
         .eq("id", question_id) \
@@ -162,6 +193,79 @@ def update_question(question_id: int, payload: CreateQuestionRequest, user=Depen
         "question": res.data[0],
     }
 
+
+
+@router.get("/questions/irt")
+def get_next_question(user=Depends(get_current_user)):
+    """
+    Selects the next question across all topics using IRT:
+    - Prioritises FSRS-due questions
+    - Falls back to new questions
+    - Returns ONE best question
+    """
+
+    user_id = str(user.id)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # 1. Get all user topic thetas
+    theta_resp = supabase_db.table("user_topic_theta") \
+        .select("*") \
+        .eq("user_id", user_id) \
+        .execute()
+
+    theta_map = {row["topic_id"]: row["theta"] for row in (theta_resp.data or [])}
+    calibrated_map = {row["topic_id"]: row["is_calibrated"] for row in (theta_resp.data or [])}
+
+    # 2. Fetch FSRS-due questions (all topics)
+    due_resp = supabase_db.table("fsrs_cards") \
+        .select("question_id, questions(*)") \
+        .eq("user_id", user_id) \
+        .lte("due", now_iso) \
+        .execute()
+
+    due_questions = [row["questions"] for row in (due_resp.data or []) if row.get("questions")]
+
+    # 3. Fetch seen question IDs
+    seen_resp = supabase_db.table("fsrs_cards") \
+        .select("question_id") \
+        .eq("user_id", user_id) \
+        .execute()
+
+    seen_ids = [row["question_id"] for row in (seen_resp.data or [])]
+
+    # 4. Fetch new questions with b-range pre-filter
+    avg_theta = sum(theta_map.values()) / len(theta_map) if theta_map else 0.0
+
+    new_query = supabase_db.table("questions") \
+        .select("*") \
+        .gte("irt_b", avg_theta - 1.5) \
+        .lte("irt_b", avg_theta + 1.5) \
+        .limit(NEW_LIMIT)
+
+    if seen_ids:
+        new_query = new_query.not_.in_("id", seen_ids)
+
+    new_questions = new_query.execute().data or []
+
+    # 5. Select: prioritise due, fall back to new
+    if due_questions:
+        pool = due_questions
+    elif new_questions:
+        pool = new_questions
+    else:
+        raise HTTPException(404, "No questions available")
+
+    # 6. IRT selection
+    any_calibrated = any(calibrated_map.values()) if calibrated_map else False
+    target = 0.7 if any_calibrated else None
+
+    best_q = select_best_question_per_topic(theta_map, pool, target=target)
+
+    if best_q is None:
+        raise HTTPException(status_code=404, detail="No suitable question found")
+
+    best_q.pop("answer", None)
+    return best_q
 
 
 @router.post("/questions/irt/by-topics")
@@ -357,11 +461,13 @@ def delete_all_questions(user=Depends(get_current_user)):
 
     # Fetch IDs of all questions owned by this user.
     q_resp = supabase_db.table("questions") \
-        .select("id") \
+        .select("id, image_url") \
         .eq("created_by", user_id) \
         .execute()
 
-    user_question_ids = [row["id"] for row in (q_resp.data or [])]
+    rows = q_resp.data or []
+    user_question_ids = [row["id"] for row in rows]
+    image_urls = [row.get("image_url") for row in rows]
 
     if not user_question_ids:
         return {"message": "No questions to delete", "deleted_count": 0}
@@ -371,6 +477,8 @@ def delete_all_questions(user=Depends(get_current_user)):
         .delete() \
         .in_("question_id", user_question_ids) \
         .execute()
+
+    _cleanup_uploaded_images(image_urls)
 
     res = supabase_db.table("questions") \
         .delete() \
@@ -395,7 +503,7 @@ def delete_questions(request: BulkDeleteRequest, user=Depends(get_current_user))
 
     # Verify all questions exist and belong to this user.
     q_resp = supabase_db.table("questions") \
-        .select("id, created_by") \
+        .select("id, created_by, image_url") \
         .in_("id", request.ids) \
         .execute()
 
@@ -415,6 +523,8 @@ def delete_questions(request: BulkDeleteRequest, user=Depends(get_current_user))
         .in_("question_id", request.ids) \
         .execute()
 
+    _cleanup_uploaded_images([row.get("image_url") for row in found])
+
     res = supabase_db.table("questions") \
         .delete() \
         .in_("id", request.ids) \
@@ -433,7 +543,7 @@ def delete_question(question_id: int, user=Depends(get_current_user)):
     """
     # Check ownership first
     q = supabase_db.table("questions") \
-        .select("id, created_by") \
+        .select("id, created_by, image_url") \
         .eq("id", question_id) \
         .single() \
         .execute()
@@ -449,6 +559,8 @@ def delete_question(question_id: int, user=Depends(get_current_user)):
         .delete() \
         .eq("question_id", question_id) \
         .execute()
+
+    _cleanup_uploaded_images([q.data.get("image_url")])
 
     res = supabase_db.table("questions") \
         .delete() \

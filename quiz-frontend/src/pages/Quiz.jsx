@@ -49,7 +49,7 @@ function Quiz() {
     }
 
     const data = await res.json();
-    return data.due_count ?? 0;
+    return data.total_available ?? 0;
   }, [token]);
 
   const fetchNextQuestion = useCallback(async () => {
@@ -347,7 +347,7 @@ function Quiz() {
             />
             <Typography variant="caption" sx={{ mt: 0.5, display: "block", textAlign: "center" }}>
               {questionCount} completed so far
-              {` • ${dueQuestionsRemaining} due questions remaining`}
+              {` • ${dueQuestionsRemaining} questions remaining`}
             </Typography>
           </Box>
 
@@ -357,6 +357,16 @@ function Quiz() {
           <Typography variant="subtitle1" sx={{ mb: 2 }}>
             {currentQuestion.text}
           </Typography>
+
+          {currentQuestion.image_url && (
+            <Box sx={{ mb: 2, textAlign: "center" }}>
+              <img
+                src={currentQuestion.image_url}
+                alt="Question illustration"
+                style={{ maxWidth: "100%", maxHeight: 260, borderRadius: 6 }}
+              />
+            </Box>
+          )}
 
           {renderAnswerInput()}
 

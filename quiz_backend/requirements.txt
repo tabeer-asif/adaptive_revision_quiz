@@ -4,3 +4,4 @@ supabase
 fsrs
 rapidfuzz
 python-dotenv
+python-multipart

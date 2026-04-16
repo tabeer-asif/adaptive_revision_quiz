@@ -45,6 +45,8 @@ const createInitialFormState = () => ({
   difficulty: "1",
   tolerance: "",
   keywords: [""],
+  image_url: "",
+  imageUploading: false,
 });
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
@@ -144,6 +146,30 @@ function Questions() {
     setQuestions(refreshedQuestions);
     setSelectedQuestionIds([]);
   }, [fetchQuestions]);
+
+  // ─── Image upload ─────────────────────────────────────────────────────────
+
+  // Uploads a file to Supabase Storage via the backend and stores the returned URL in form state.
+  const handleImageUpload = async (file) => {
+    updateQuestionForm("imageUploading", true);
+    setFormError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(`${API_URL}/uploads/question-image`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Upload failed");
+      updateQuestionForm("image_url", data.image_url);
+    } catch (err) {
+      setFormError(err.message || "Image upload failed");
+    } finally {
+      updateQuestionForm("imageUploading", false);
+    }
+  };
 
   // ─── Topic creation ───────────────────────────────────────────────────────
 
@@ -447,6 +473,8 @@ function Questions() {
       keywords: normalizedKeywords.length
         ? normalizedKeywords
         : [""],
+      image_url: question?.image_url ?? "",
+      imageUploading: false,
     };
   };
 
@@ -491,6 +519,8 @@ function Questions() {
     if (questionForm.type === "SHORT") {
       payload.keywords = questionForm.keywords;
     }
+
+    payload.image_url = questionForm.image_url || null;
 
     return payload;
   };
@@ -1165,6 +1195,46 @@ function Questions() {
               </>
             ) : null}
 
+            {/* ─── Image upload ─────────────────────────────────────────── */}
+            <Box>
+              <Button
+                variant="outlined"
+                component="label"
+                disabled={questionForm.imageUploading}
+                size="small"
+              >
+                {questionForm.imageUploading ? "Uploading…" : "Attach Image"}
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleImageUpload(file);
+                    e.target.value = "";
+                  }}
+                />
+              </Button>
+
+              {questionForm.image_url && (
+                <Box sx={{ mt: 1 }}>
+                  <img
+                    src={questionForm.image_url}
+                    alt="Question preview"
+                    style={{ maxWidth: "100%", maxHeight: 180, borderRadius: 4, display: "block" }}
+                  />
+                  <Button
+                    size="small"
+                    color="error"
+                    sx={{ mt: 0.5 }}
+                    onClick={() => updateQuestionForm("image_url", "")}
+                  >
+                    Remove image
+                  </Button>
+                </Box>
+              )}
+            </Box>
+
             <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, pt: 1 }}>
               <Button
                 variant="text"
@@ -1179,7 +1249,7 @@ function Questions() {
               <Button
                 variant="contained"
                 onClick={handleCreateQuestion}
-                disabled={submitting}
+                disabled={submitting || questionForm.imageUploading}
               >
                 {submitting
                   ? (editingQuestionId !== null ? "Saving..." : "Creating...")

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 from typing import Optional, Dict, List, Union, Literal
 
 
@@ -29,7 +29,7 @@ class CreateQuestionRequest(BaseModel):
     irt_b: Optional[float] = Field(default=None, ge=-3.0, le=3.0)
     irt_c: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     irt_thresholds: Optional[List[float]] = None # GRM thresholds for MULTI_MCQ
-
+    image_url: Optional[str] = None
 
 class BulkDeleteRequest(BaseModel):
     ids: List[int]

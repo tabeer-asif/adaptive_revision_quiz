@@ -5,12 +5,18 @@ from app.routes import auth as auth_routes
 from tests.conftest import FakeSupabaseAuthClient, FakeAuthModule, StubSupabaseDB
 
 
+"""Route-level auth tests with mocked Supabase clients."""
+
+# Convention: tests below follow Arrange / Act / Assert flow.
+
+
 class Obj:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
 
 
 def test_register_success(monkeypatch):
+    # Successful signup should create both auth and DB user records.
     auth_mod = FakeAuthModule()
     auth_mod.sign_up_result = Obj(user=Obj(id="user-1"))
     monkeypatch.setattr(auth_routes, "supabase_auth", FakeSupabaseAuthClient(auth_mod))
@@ -23,6 +29,7 @@ def test_register_success(monkeypatch):
 
 
 def test_register_fail_sign_up(monkeypatch):
+    # If auth signup returns no user, endpoint should fail with 400.
     auth_mod = FakeAuthModule()
     auth_mod.sign_up_result = Obj(user=None)
     monkeypatch.setattr(auth_routes, "supabase_auth", FakeSupabaseAuthClient(auth_mod))
@@ -34,6 +41,7 @@ def test_register_fail_sign_up(monkeypatch):
 
 
 def test_register_fail_db(monkeypatch):
+    # DB insert failure after signup should map to 500.
     auth_mod = FakeAuthModule()
     auth_mod.sign_up_result = Obj(user=Obj(id="user-1"))
     monkeypatch.setattr(auth_routes, "supabase_auth", FakeSupabaseAuthClient(auth_mod))
@@ -50,6 +58,7 @@ def test_register_fail_db(monkeypatch):
 
 
 def test_login_success_and_failure(monkeypatch):
+    # Login should return token on success and 401 on auth errors.
     auth_mod = FakeAuthModule()
     auth_mod.sign_in_result = Obj(session=Obj(access_token="token"), user=Obj(id="uid"))
     monkeypatch.setattr(auth_routes, "supabase_auth", FakeSupabaseAuthClient(auth_mod))
@@ -64,6 +73,7 @@ def test_login_success_and_failure(monkeypatch):
 
 
 def test_verify_token_paths(monkeypatch):
+    # Verify happy path plus malformed header, invalid user, and exception path.
     auth_mod = FakeAuthModule()
     auth_mod.get_user_result = Obj(user=Obj(id="uid"))
     monkeypatch.setattr(auth_routes, "supabase_auth", FakeSupabaseAuthClient(auth_mod))

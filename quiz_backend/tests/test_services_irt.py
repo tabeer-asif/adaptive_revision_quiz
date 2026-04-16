@@ -5,7 +5,13 @@ from fsrs import Rating
 from app.services import irt
 
 
+"""Unit tests for IRT and scoring helpers used by quiz logic."""
+
+# Convention: tests below follow Arrange / Act / Assert flow.
+
+
 def test_irt_probabilities_and_updates():
+    # Probability helpers and theta update functions should move theta upward on correct response.
     p2 = irt.irt_prob_2pl(theta=0.0, a=1.0, b=0.0)
     assert 0.49 < p2 < 0.51
 
@@ -19,6 +25,7 @@ def test_irt_probabilities_and_updates():
 
 
 def test_default_thresholds_and_grm():
+    # GRM thresholds/probabilities should be well-formed and normalized.
     th = irt.default_grm_thresholds(0.0)
     assert th == [-0.5, 0.5]
 
@@ -30,6 +37,7 @@ def test_default_thresholds_and_grm():
 
 
 def test_scoring_helpers():
+    # Type-specific scoring helpers should return expected numeric scores.
     assert irt.score_mcq("A", "A") == 1.0
     assert irt.score_mcq("A", "B") == 0.0
 
@@ -41,6 +49,7 @@ def test_scoring_helpers():
 
 
 def test_score_short_paths():
+    # SHORT scoring supports no-keyword, exact-match, and keyword-match paths.
     ok, score = irt.score_short("answer", [], "")
     assert ok is True and score == 1.0
 
@@ -56,6 +65,7 @@ def test_score_short_paths():
 
 
 def test_select_best_question_and_rating_paths():
+    # Selection and FSRS rating helpers should cover both calibration and learning modes.
     questions = [
         {"id": 1, "topic_id": 1, "type": "MCQ", "irt_a": 1.0, "irt_b": 0.0, "irt_c": 0.25},
         {"id": 2, "topic_id": 1, "type": "NUMERIC", "irt_a": 1.0, "irt_b": 1.5, "irt_c": None},
