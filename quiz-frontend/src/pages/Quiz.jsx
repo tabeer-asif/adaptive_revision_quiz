@@ -29,6 +29,10 @@ function Quiz() {
   const [questionCount, setQuestionCount] = useState(0);
   const [startTime, setStartTime] = useState(null);
   const [dueQuestionsRemaining, setDueQuestionsRemaining] = useState(0);
+  const [correctAnswer, setCorrectAnswer] = useState("");
+  const [awaitingOpenRating, setAwaitingOpenRating] = useState(false);
+  const [openResponseTimeSeconds, setOpenResponseTimeSeconds] = useState(null);
+  const [submittingRating, setSubmittingRating] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -74,6 +78,11 @@ function Quiz() {
       const res = await fetch(fetchUrl, fetchOptions);
 
       if (!res.ok) {
+        if (res.status === 404) {
+          setCurrentQuestion(null);
+          setLoading(false);
+          return false;
+        }
         throw new Error("Failed to fetch question");
       }
 
@@ -82,6 +91,10 @@ function Quiz() {
       setSelectedOption("");
       setSelectedAnswers([]);
       setFeedback("");
+      setCorrectAnswer("");
+      setAwaitingOpenRating(false);
+      setOpenResponseTimeSeconds(null);
+      setSubmittingRating(false);
       setCurrentQuestion(data);
       setLoading(false);
       setStartTime(Date.now());
@@ -113,12 +126,7 @@ function Quiz() {
         return;
       }
 
-      const hasDueQuestions = await hasDueQuestionsRemaining();
-      if (!hasDueQuestions) {
-        setCurrentQuestion(null);
-        setLoading(false);
-        return;
-      }
+      await hasDueQuestionsRemaining();
 
       const hasQuestion = await fetchNextQuestion();
       if (!hasQuestion) {
@@ -151,6 +159,8 @@ function Quiz() {
     return !selectedOption || !String(selectedOption).trim();
   };
 
+  const isInputLocked = !!feedback || awaitingOpenRating;
+
   const renderAnswerInput = () => {
     const type = currentQuestion.type;
 
@@ -166,7 +176,7 @@ function Quiz() {
               value={key}
               control={<Radio />}
               label={`${key}: ${value}`}
-              disabled={!!feedback}
+              disabled={isInputLocked}
             />
           ))}
         </RadioGroup>
@@ -189,7 +199,7 @@ function Quiz() {
                         : [...prev, key]
                     )
                   }
-                  disabled={!!feedback}
+                  disabled={isInputLocked}
                 />
               }
               label={`${key}: ${value}`}
@@ -207,7 +217,7 @@ function Quiz() {
           fullWidth
           value={selectedOption}
           onChange={(e) => setSelectedOption(e.target.value)}
-          disabled={!!feedback}
+          disabled={isInputLocked}
           sx={{ mt: 1 }}
         />
       );
@@ -222,7 +232,7 @@ function Quiz() {
           minRows={type === "OPEN" ? 4 : 2}
           value={selectedOption}
           onChange={(e) => setSelectedOption(e.target.value)}
-          disabled={!!feedback}
+          disabled={isInputLocked}
           sx={{ mt: 1 }}
         />
       );
@@ -248,6 +258,42 @@ function Quiz() {
     const responseTime = endTime - startTime;
     const responseTimeSeconds = responseTime / 1000;
 
+    if (currentQuestion?.type === "OPEN") {
+      try {
+        const res = await fetch(`${API_URL}/quiz/submit-answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            question_id: currentQuestion.id,
+            selected_option: payloadAnswer,
+            response_time: responseTimeSeconds,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || "Failed to submit answer");
+        }
+
+        if (data.requires_self_rating) {
+          setCorrectAnswer(data.correct_answer || "");
+          setAwaitingOpenRating(true);
+          setOpenResponseTimeSeconds(responseTimeSeconds);
+          return;
+        }
+
+        if (data.correct) {
+          setScore((prev) => prev + 1);
+        }
+        setCorrectAnswer(data.correct_answer || "");
+        setFeedback(data.correct ? "✅ Correct!" : "❌ Wrong!");
+      } catch (err) {
+        console.error(err);
+        setFeedback(err instanceof Error ? err.message : "Error submitting answer.");
+      }
+      return;
+    }
+
     try {
       const res = await fetch(`${API_URL}/quiz/submit-answer`, {
         method: "POST",
@@ -267,6 +313,7 @@ function Quiz() {
       if (data.correct) {
         setScore(prev => prev + 1);
       }
+      setCorrectAnswer(data.correct_answer || "");
       setFeedback(data.correct ? "✅ Correct!" : "❌ Wrong!");
     } catch (err) {
       console.error(err);
@@ -274,19 +321,62 @@ function Quiz() {
     }
   };
 
+  const handleOpenRating = async (rating) => {
+    if (!currentQuestion || !awaitingOpenRating || submittingRating) return;
+
+    const payloadAnswer = buildAnswer();
+    if (payloadAnswer == null || openResponseTimeSeconds == null) {
+      setFeedback("Unsupported or invalid answer format.");
+      return;
+    }
+
+    setSubmittingRating(true);
+    try {
+      const res = await fetch(`${API_URL}/quiz/submit-answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          question_id: currentQuestion.id,
+          selected_option: payloadAnswer,
+          response_time: openResponseTimeSeconds,
+          self_rating: rating,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to submit answer");
+      }
+
+      if (data.correct) {
+        setScore((prev) => prev + 1);
+      }
+
+      setCorrectAnswer(data.correct_answer || correctAnswer);
+      setAwaitingOpenRating(false);
+      setOpenResponseTimeSeconds(null);
+      setFeedback("Response saved.");
+    } catch (err) {
+      console.error(err);
+      setFeedback(err instanceof Error ? err.message : "Error submitting answer.");
+    } finally {
+      setSubmittingRating(false);
+    }
+  };
+
   const handleNext = async () => {
     setSelectedOption("");
     setSelectedAnswers([]);
     setFeedback("");
+    setCorrectAnswer("");
+    setAwaitingOpenRating(false);
+    setOpenResponseTimeSeconds(null);
+    setSubmittingRating(false);
 
     const answeredCount = questionCount + 1;
     setQuestionCount(answeredCount);
 
-    const hasDueQuestions = await hasDueQuestionsRemaining();
-    if (!hasDueQuestions) {
-      navigate("/results", { state: { score, total: answeredCount } });
-      return;
-    }
+    await hasDueQuestionsRemaining();
 
     const hasNextQuestion = await fetchNextQuestion();
     if (!hasNextQuestion) {
@@ -318,12 +408,17 @@ function Quiz() {
           minHeight: "100vh",
         }}
       >
-        <Typography variant="h4">No due questions available</Typography>
+        <Typography variant="h4">No questions available</Typography>
       </Box>
     );
   }
 
-  const progress = feedback ? 100 : 0;
+  const progress = (feedback || awaitingOpenRating) ? 100 : 0;
+  const feedbackSeverity = feedback.includes("Correct")
+    ? "success"
+    : feedback.includes("Wrong") || feedback.toLowerCase().includes("error") || feedback.toLowerCase().includes("failed")
+      ? "error"
+      : "info";
   
 
   return (
@@ -376,14 +471,14 @@ function Quiz() {
               fullWidth
               sx={{ mt: 2 }}
               onClick={handleSubmit}
-              disabled={isSubmitDisabled()}
+              disabled={isSubmitDisabled() || awaitingOpenRating}
             >
               Submit
             </Button>
           ) : (
             <>
               <Alert
-                severity={feedback.includes("Correct") ? "success" : "error"}
+                severity={feedbackSeverity}
                 sx={{ mt: 2 }}
               >
                 {feedback}
@@ -397,6 +492,54 @@ function Quiz() {
                 Next
               </Button>
             </>
+          )}
+
+          {correctAnswer && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              Correct answer: {correctAnswer}
+            </Alert>
+          )}
+
+          {awaitingOpenRating && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                How did this feel?
+              </Typography>
+              <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 1 }}>
+                <Button
+                  variant="outlined"
+                  onClick={() => handleOpenRating(4)}
+                  disabled={submittingRating}
+                  sx={{ color: "success.main", borderColor: "success.main", bgcolor: "success.50", "&:hover": { bgcolor: "success.100", borderColor: "success.dark" } }}
+                >
+                  Easy
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={() => handleOpenRating(3)}
+                  disabled={submittingRating}
+                  sx={{ color: "info.main", borderColor: "info.main", bgcolor: "info.50", "&:hover": { bgcolor: "info.100", borderColor: "info.dark" } }}
+                >
+                  Good
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={() => handleOpenRating(2)}
+                  disabled={submittingRating}
+                  sx={{ color: "warning.main", borderColor: "warning.main", bgcolor: "warning.50", "&:hover": { bgcolor: "warning.100", borderColor: "warning.dark" } }}
+                >
+                  Hard
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={() => handleOpenRating(1)}
+                  disabled={submittingRating}
+                  sx={{ color: "error.main", borderColor: "error.main", bgcolor: "error.50", "&:hover": { bgcolor: "error.100", borderColor: "error.dark" } }}
+                >
+                  Again
+                </Button>
+              </Box>
+            </Box>
           )}
         </CardContent>
       </Card>

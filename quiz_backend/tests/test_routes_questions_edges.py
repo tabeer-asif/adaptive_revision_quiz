@@ -152,6 +152,43 @@ def test_get_next_question_by_topics_not_found_cases(monkeypatch):
         q_routes.get_next_question_by_topics(req, user=FakeUser("u1"))
     assert exc.value.status_code == 404
 
+
+def test_get_next_question_falls_back_when_b_range_empty(monkeypatch):
+    # If range-filtered new query is empty, endpoint should retry with broader unseen pool.
+    db = StubSupabaseDB({
+        ("user_topic_theta", "select"): [{"data": []}],
+        ("fsrs_cards", "select"): [{"data": []}, {"data": []}],
+        ("questions", "select"): [
+            {"data": []},
+            {"data": [{"id": 11, "topic_id": 1, "type": "MCQ", "answer": "A"}]},
+        ],
+    })
+    monkeypatch.setattr(q_routes, "supabase_db", db)
+    monkeypatch.setattr(q_routes, "select_best_question_per_topic", lambda theta_map, pool, target=None: dict(pool[0]))
+
+    out = q_routes.get_next_question(user=FakeUser("u1"))
+    assert out["id"] == 11
+    assert "answer" not in out
+
+
+def test_get_next_question_by_topics_falls_back_when_b_range_empty(monkeypatch):
+    # Topic-filtered endpoint should also retry with broader unseen pool in selected topics.
+    req = type("Req", (), {"topics": [1]})
+    db = StubSupabaseDB({
+        ("user_topic_theta", "select"): [{"data": []}],
+        ("fsrs_cards", "select"): [{"data": []}, {"data": []}],
+        ("questions", "select"): [
+            {"data": []},
+            {"data": [{"id": 12, "topic_id": 1, "type": "MCQ", "answer": "A"}]},
+        ],
+    })
+    monkeypatch.setattr(q_routes, "supabase_db", db)
+    monkeypatch.setattr(q_routes, "select_best_question_per_topic", lambda theta_map, pool, target=None: dict(pool[0]))
+
+    out = q_routes.get_next_question_by_topics(req, user=FakeUser("u1"))
+    assert out["id"] == 12
+    assert "answer" not in out
+
     db_some = StubSupabaseDB({
         ("user_topic_theta", "select"): [{"data": []}],
         ("fsrs_cards", "select"): [{"data": []}, {"data": []}],

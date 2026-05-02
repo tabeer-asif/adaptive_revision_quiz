@@ -218,8 +218,9 @@ def get_next_question(user=Depends(get_current_user)):
 
     # 2. Fetch FSRS-due questions (all topics)
     due_resp = supabase_db.table("fsrs_cards") \
-        .select("question_id, questions(*)") \
+        .select("question_id, questions!inner(*)") \
         .eq("user_id", user_id) \
+        .eq("questions.created_by", user_id) \
         .lte("due", now_iso) \
         .execute()
 
@@ -227,8 +228,9 @@ def get_next_question(user=Depends(get_current_user)):
 
     # 3. Fetch seen question IDs
     seen_resp = supabase_db.table("fsrs_cards") \
-        .select("question_id") \
+        .select("question_id, questions!inner(id)") \
         .eq("user_id", user_id) \
+        .eq("questions.created_by", user_id) \
         .execute()
 
     seen_ids = [row["question_id"] for row in (seen_resp.data or [])]
@@ -238,6 +240,7 @@ def get_next_question(user=Depends(get_current_user)):
 
     new_query = supabase_db.table("questions") \
         .select("*") \
+        .eq("created_by", user_id) \
         .gte("irt_b", avg_theta - 1.5) \
         .lte("irt_b", avg_theta + 1.5) \
         .limit(NEW_LIMIT)
@@ -246,6 +249,18 @@ def get_next_question(user=Depends(get_current_user)):
         new_query = new_query.not_.in_("id", seen_ids)
 
     new_questions = new_query.execute().data or []
+
+    # Fallback: if no unseen questions in the target b-window, broaden to any unseen new question.
+    if not new_questions:
+        fallback_query = supabase_db.table("questions") \
+            .select("*") \
+            .eq("created_by", user_id) \
+            .limit(NEW_LIMIT)
+
+        if seen_ids:
+            fallback_query = fallback_query.not_.in_("id", seen_ids)
+
+        new_questions = fallback_query.execute().data or []
 
     # 5. Select: prioritise due, fall back to new
     if due_questions:
@@ -311,6 +326,7 @@ def get_next_question_by_topics(
     due_resp = supabase_db.table("fsrs_cards") \
         .select("question_id, questions!inner(*)") \
         .eq("user_id", user_id) \
+        .eq("questions.created_by", user_id) \
         .lte("due", now_iso) \
         .in_("questions.topic_id", topic_ids) \
         .execute()
@@ -321,8 +337,9 @@ def get_next_question_by_topics(
     # 3️⃣ Fetch seen question IDs (for new question exclusion)
     # -----------------------------
     seen_resp = supabase_db.table("fsrs_cards") \
-        .select("question_id") \
+        .select("question_id, questions!inner(id)") \
         .eq("user_id", user_id) \
+        .eq("questions.created_by", user_id) \
         .execute()
 
     seen_ids = [row["question_id"] for row in (seen_resp.data or [])]
@@ -334,6 +351,7 @@ def get_next_question_by_topics(
 
     new_query = supabase_db.table("questions") \
         .select("*") \
+        .eq("created_by", user_id) \
         .in_("topic_id", topic_ids) \
         .gte("irt_b", avg_theta - 1.5) \
         .lte("irt_b", avg_theta + 1.5) \
@@ -343,6 +361,19 @@ def get_next_question_by_topics(
         new_query = new_query.not_.in_("id", seen_ids)
 
     new_questions = new_query.execute().data or []
+
+    # Fallback: if no unseen questions in the target b-window, broaden to any unseen new question in topics.
+    if not new_questions:
+        fallback_query = supabase_db.table("questions") \
+            .select("*") \
+            .eq("created_by", user_id) \
+            .in_("topic_id", topic_ids) \
+            .limit(NEW_LIMIT)
+
+        if seen_ids:
+            fallback_query = fallback_query.not_.in_("id", seen_ids)
+
+        new_questions = fallback_query.execute().data or []
 
     # -----------------------------
     # 5️⃣ Select: prioritise due, fall back to new
@@ -438,8 +469,9 @@ def get_due_count(user=Depends(get_current_user)):
     .eq("created_by", user_id) \
     .execute()
     seen_count_resp = supabase_db.table("fsrs_cards") \
-        .select("question_id", count="exact") \
+        .select("question_id, questions!inner(id)", count="exact") \
         .eq("user_id", user_id) \
+        .eq("questions.created_by", user_id) \
         .execute()
 
     new_count = max(0, (total_resp.count or 0) - (seen_count_resp.count or 0))

@@ -84,7 +84,7 @@ def validate_short_text(selected_option) -> str:
     return submitted_text
 
 
-def validate_open_text(selected_option, self_rating) -> str:
+def validate_open_text(selected_option, self_rating, require_rating: bool = True) -> str:
     if not isinstance(selected_option, str):
         raise HTTPException(status_code=400, detail="OPEN answer must be a string")
 
@@ -92,7 +92,7 @@ def validate_open_text(selected_option, self_rating) -> str:
     if not submitted_text:
         raise HTTPException(status_code=400, detail="OPEN answer text is required")
 
-    if self_rating is None or self_rating not in [1, 2, 3, 4]:
+    if require_rating and (self_rating is None or self_rating not in [1, 2, 3, 4]):
         raise HTTPException(
             status_code=400,
             detail="OPEN questions require a self_rating between 1 and 4"

@@ -223,7 +223,7 @@ def test_submit_answer_numeric_short_open_and_existing_card(monkeypatch):
     assert out_short["correct"] is True
 
     monkeypatch.setattr(quiz_routes, "Rating", lambda r: SimpleNamespace(value=r))
-    monkeypatch.setattr(quiz_routes, "validate_open_text", lambda s, r: "open answer")
+    monkeypatch.setattr(quiz_routes, "validate_open_text", lambda s, r, require_rating=True: "open answer")
 
     db_open = StubSupabaseDB({
         ("questions", "select"): [{"data": [{
@@ -251,3 +251,32 @@ def test_submit_answer_numeric_short_open_and_existing_card(monkeypatch):
         user=FakeUser("u1"),
     )
     assert out_open["correct"] is False
+
+
+def test_submit_open_answer_without_rating_returns_preview(monkeypatch):
+    # OPEN questions can return model answer first, then wait for a self-rating.
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(quiz_routes, "validate_open_text", lambda s, r, require_rating=True: "open answer")
+
+    db_open = StubSupabaseDB({
+        ("questions", "select"): [{"data": [{
+            "id": 30,
+            "topic_id": 9,
+            "type": "OPEN",
+            "answer": "Use key steps and vocabulary.",
+            "options": None,
+            "irt_a": 1.0,
+            "irt_b": 0.0,
+            "n_responses": 0,
+            "n_correct": 0,
+        }]}],
+    })
+    monkeypatch.setattr(quiz_routes, "supabase_db", db_open)
+
+    out = quiz_routes.submit_answer(
+        SubmitAnswerRequest(question_id=30, selected_option="my response", response_time=8.0),
+        user=FakeUser("u1"),
+    )
+
+    assert out["requires_self_rating"] is True
+    assert out["correct_answer"] == "Use key steps and vocabulary."

@@ -34,6 +34,31 @@ from app.utils.quiz_validation import (
 router = APIRouter()
 scheduler = Scheduler() #FSRS scheduler
 
+
+def format_correct_answer(question_type, db_answer, options):
+    if question_type == "MCQ":
+        key = str(db_answer).strip() if db_answer is not None else ""
+        if options and key in options:
+            return f"{key}: {options[key]}"
+        return key
+
+    if question_type == "MULTI_MCQ":
+        if not isinstance(db_answer, list):
+            return ""
+
+        labels = []
+        for raw_key in db_answer:
+            key = str(raw_key).strip()
+            if not key:
+                continue
+            if options and key in options:
+                labels.append(f"{key}: {options[key]}")
+            else:
+                labels.append(key)
+        return ", ".join(labels)
+
+    return "" if db_answer is None else str(db_answer)
+
 @router.post("/submit-answer")
 def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
     """
@@ -79,6 +104,7 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
 
     db_answer = question["answer"]
     options = question["options"] or {}
+    correct_answer = format_correct_answer(question_type, db_answer, options)
 
     if question_type == "MCQ":
         selected_key = validate_mcq_selection(selected_option, options)
@@ -113,8 +139,13 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
         correct, score = score_short(submitted_text, normalized_keywords, model_answer)
 
     elif question_type == "OPEN":
-        submitted_text = validate_open_text(selected_option, self_rating)
+        submitted_text = validate_open_text(selected_option, self_rating, require_rating=False)
         model_answer = str(db_answer).strip() if db_answer is not None else ""
+        if self_rating is None:
+            return {
+                "requires_self_rating": True,
+                "correct_answer": model_answer,
+            }
         correct = self_rating >= 3 # rely on user's self-assessment for open-ended questions
         score = float(self_rating) / 4.0
         
@@ -312,7 +343,8 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
 
     return {
         "correct": correct,
-        "next_review": card.due.isoformat()
+        "next_review": card.due.isoformat(),
+        "correct_answer": correct_answer,
     }
 
 

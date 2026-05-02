@@ -54,6 +54,13 @@ const SHORT_QUESTION = {
   options: {},
 };
 
+const OPEN_QUESTION = {
+  id: "q5",
+  type: "OPEN",
+  text: "Explain photosynthesis.",
+  options: {},
+};
+
 /** Mock two-call init sequence: due/count then irt */
 function mockInitFetch(dueCount, question) {
   global.fetch = jest.fn()
@@ -82,16 +89,22 @@ describe("Quiz page", () => {
     expect(screen.getByRole("progressbar")).toBeInTheDocument();
   });
 
-  it("shows 'No due questions available' when due count is 0", async () => {
+  it("shows 'No questions available' when no question can be fetched", async () => {
     localStorage.setItem("token", "tok");
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ due_count: 0, total_available: 0 }),
-    });
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ due_count: 0, total_available: 0 }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({ detail: "No questions available" }),
+      });
 
     renderQuiz();
     await waitFor(() => {
-      expect(screen.getByText("No due questions available")).toBeInTheDocument();
+      expect(screen.getByText("No questions available")).toBeInTheDocument();
     });
   });
 
@@ -219,13 +232,46 @@ describe("Quiz page", () => {
     });
   });
 
+  it("for OPEN questions, shows model answer then collects self-rating", async () => {
+    localStorage.setItem("token", "tok");
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 1, total_available: 1 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => OPEN_QUESTION })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ requires_self_rating: true, correct_answer: "Plants convert light to energy." }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ correct: false, correct_answer: "Plants convert light to energy." }),
+      });
+
+    renderQuiz();
+    await screen.findByText("Explain photosynthesis.");
+
+    await userEvent.type(screen.getByLabelText(/Your answer/i), "It is when plants breathe");
+    await userEvent.click(screen.getByRole("button", { name: /Submit/i }));
+
+    await screen.findByText("Correct answer: Plants convert light to energy.");
+    expect(screen.getByRole("button", { name: /Easy/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Again/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /Hard/i }));
+
+    await screen.findByText("Response saved.");
+    expect(screen.queryByText("❌ Wrong!")).not.toBeInTheDocument();
+    expect(screen.queryByText("✅ Correct!")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Next/i })).toBeInTheDocument();
+  });
+
   it("navigates to results when no due questions remain after Next", async () => {
     localStorage.setItem("token", "tok");
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 1, total_available: 1 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => MCQ_QUESTION })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ correct: true }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 0, total_available: 0 }) }); // no more due
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ due_count: 0, total_available: 0 }) })
+      .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ detail: "No questions available" }) });
 
     renderQuiz();
     await screen.findByText("What is 2 + 2?");
