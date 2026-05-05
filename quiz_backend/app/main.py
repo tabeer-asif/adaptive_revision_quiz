@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import auth, questions, quiz, topics, uploads
+from app.routes import auth, questions, quiz, topics, uploads, ai, explanations
 
 
 
@@ -11,6 +11,8 @@ app.include_router(questions.router)
 app.include_router(quiz.router, prefix="/quiz")
 app.include_router(topics.router)
 app.include_router(uploads.router)
+app.include_router(ai.router)
+app.include_router(explanations.router)
 
 origins_env = os.getenv("FRONTEND_ORIGINS")
 if origins_env:

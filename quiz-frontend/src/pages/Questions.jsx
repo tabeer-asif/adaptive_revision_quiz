@@ -23,12 +23,81 @@ import {
   Checkbox,
   FormControlLabel,
   Stack,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Chip,
+  LinearProgress,
 } from "@mui/material";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const API_URL = process.env.REACT_APP_API_URL;
 const QUESTION_TYPES = ["MCQ", "MULTI_MCQ", "NUMERIC", "SHORT", "OPEN"];
+const TYPE_DIFFICULTY_WEIGHTS = {
+  MCQ: [1.8, 1.6, 1.2, 0.9, 0.7],
+  SHORT: [1.6, 1.4, 1.1, 0.9, 0.8],
+  NUMERIC: [0.9, 1.1, 1.4, 1.2, 1.0],
+  MULTI_MCQ: [0.8, 1.0, 1.2, 1.4, 1.5],
+  OPEN: [0.4, 0.6, 1.0, 1.5, 1.8],
+};
+const TYPE_BLOOM_MAP = {
+  MCQ: "Remember/Understand - recognition and basic interpretation",
+  MULTI_MCQ: "Understand/Analyze - evaluate each option",
+  NUMERIC: "Apply - execute method or formula",
+  SHORT: "Remember/Understand - recall without options",
+  OPEN: "Evaluate/Create - justify, critique, synthesize",
+};
 const FILTER_CONTROL_HEIGHT = 56; // px — keeps all filter-row controls the same height
+
+const allocateTypeCounts = (selectedTypes, count, difficulty) => {
+  const ordered = QUESTION_TYPES.filter((t) => selectedTypes.includes(t));
+  if (!ordered.length || count <= 0) return {};
+
+  const counts = Object.fromEntries(ordered.map((t) => [t, 0]));
+  const guaranteed = count >= ordered.length ? ordered.length : 0;
+  if (guaranteed > 0) {
+    ordered.forEach((t) => {
+      counts[t] = 1;
+    });
+  }
+
+  const remaining = count - guaranteed;
+  if (remaining <= 0) return counts;
+
+  const diffIdx = Math.max(0, Math.min(4, Number(difficulty) - 1));
+  const weights = Object.fromEntries(
+    ordered.map((t) => [t, TYPE_DIFFICULTY_WEIGHTS[t][diffIdx]])
+  );
+  const weightSum = Object.values(weights).reduce((a, b) => a + b, 0) || ordered.length;
+
+  const rawAlloc = Object.fromEntries(
+    ordered.map((t) => [t, remaining * (weights[t] / weightSum)])
+  );
+  const floored = Object.fromEntries(
+    ordered.map((t) => [t, Math.floor(rawAlloc[t])])
+  );
+
+  ordered.forEach((t) => {
+    counts[t] += floored[t];
+  });
+
+  const used = ordered.reduce((sum, t) => sum + floored[t], 0);
+  const leftovers = remaining - used;
+  if (leftovers > 0) {
+    const ranked = [...ordered].sort((a, b) => {
+      const fracDiff = (rawAlloc[b] - floored[b]) - (rawAlloc[a] - floored[a]);
+      if (fracDiff !== 0) return fracDiff;
+      return QUESTION_TYPES.indexOf(a) - QUESTION_TYPES.indexOf(b);
+    });
+
+    for (let i = 0; i < leftovers; i += 1) {
+      counts[ranked[i]] += 1;
+    }
+  }
+
+  return counts;
+};
 
 // ─── Initial form state factory ──────────────────────────────────────────────
 // Called both on mount and after a successful create/edit to reset the drawer.
@@ -105,6 +174,37 @@ function Questions() {
   const [newTopicName, setNewTopicName] = useState("");
   const [newTopicError, setNewTopicError] = useState("");
   const [creatingTopic, setCreatingTopic] = useState(false);
+
+  // ── AI generation dialog ───────────────────────────────────────────────────
+  const [aiDialogOpen, setAiDialogOpen] = useState(false);
+  const [aiStep, setAiStep] = useState(1);             // 1 = upload form, 2 = review
+  const [aiFile, setAiFile] = useState(null);
+  const [aiTopicId, setAiTopicId] = useState("");
+  const [aiSelectedTypes, setAiSelectedTypes] = useState(new Set());
+  // Difficulty distribution: {1: 0, 2: 2, 3: 5, 4: 3, 5: 0}
+  const [aiDifficultyDistribution, setAiDifficultyDistribution] = useState({ 1: 0, 2: 0, 3: 5, 4: 0, 5: 0 });
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiGeneratedQuestions, setAiGeneratedQuestions] = useState([]);
+  const [aiWarnings, setAiWarnings] = useState([]);
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiSaveError, setAiSaveError] = useState("");
+  const [aiFileFeasibility, setAiFileFeasibility] = useState(null); // null | { scores: {MCQ,NUMERIC,...} }
+  const [aiFeasibilityLoading, setAiFeasibilityLoading] = useState(false);
+  const [aiEditingKey, setAiEditingKey] = useState(null); // _key of question being edited inline
+  const [aiProgress, setAiProgress] = useState({ stage: "", percent: 0 });
+
+  const orderedSelectedTypes = QUESTION_TYPES.filter((type) => aiSelectedTypes.has(type));
+  const plannedTypeSplitByDifficulty = [1, 2, 3, 4, 5]
+    .map((level) => {
+      const requested = aiDifficultyDistribution[level] || 0;
+      return {
+        level,
+        requested,
+        split: allocateTypeCounts(orderedSelectedTypes, requested, level),
+      };
+    })
+    .filter((entry) => entry.requested > 0);
 
   const token = localStorage.getItem("token");
 
@@ -718,6 +818,185 @@ function Questions() {
     }
   };
 
+  // ─── AI generation handlers ──────────────────────────────────────────────
+
+  const resetAiDialog = () => {
+    setAiStep(1);
+    setAiFile(null);
+    setAiTopicId("");
+    setAiSelectedTypes(new Set());
+    setAiDifficultyDistribution({ 1: 0, 2: 0, 3: 5, 4: 0, 5: 0 });
+    setAiError("");
+    setAiGeneratedQuestions([]);
+    setAiWarnings([]);
+    setAiSaveError("");
+    setAiFileFeasibility(null);
+    setAiFeasibilityLoading(false);
+    setAiEditingKey(null);
+    setAiProgress({ stage: "", percent: 0 });
+  };
+
+  // Asks the backend AI to score how well each question type fits the uploaded document.
+  const analyzeFeasibility = async (file) => {
+    if (!file) { setAiFileFeasibility(null); return; }
+    setAiFeasibilityLoading(true);
+    setAiFileFeasibility(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(`${API_URL}/ai/feasibility`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Feasibility check failed");
+      setAiFileFeasibility({ scores: data.scores });
+    } catch {
+      // Non-blocking — just clear the scores; user can still generate
+      setAiFileFeasibility(null);
+    } finally {
+      setAiFeasibilityLoading(false);
+    }
+  };
+
+  // Patches a single generated question in the review list.
+  const updateAiQuestion = (key, patch) => {
+    setAiGeneratedQuestions((prev) =>
+      prev.map((q) => (q._key === key ? { ...q, ...patch } : q))
+    );
+  };
+
+  const handleAiGenerate = async () => {
+    if (!aiFile || !aiTopicId || aiSelectedTypes.size === 0) {
+      setAiError("Please select a file, topic, and question type.");
+      return;
+    }
+
+    const totalCount = Object.values(aiDifficultyDistribution).reduce((a, b) => a + b, 0);
+    if (totalCount === 0) {
+      setAiError("Please select at least one question to generate.");
+      return;
+    }
+
+    setAiGenerating(true);
+    setAiError("");
+    setAiProgress({ stage: "Preparing requests...", percent: 5 });
+    try {
+      const requests = [];
+      let globalKeyCounter = 0;
+      const activeDifficulties = Object.entries(aiDifficultyDistribution).filter(([, c]) => c > 0);
+      const totalBatches = activeDifficulties.length;
+
+      for (const [difficulty, count] of activeDifficulties) {
+          const formData = new FormData();
+          formData.append("file", aiFile);
+          formData.append("topic_id", aiTopicId);
+          formData.append(
+            "question_types",
+            QUESTION_TYPES.filter((type) => aiSelectedTypes.has(type)).join(",")
+          );
+          formData.append("difficulty", difficulty);
+          formData.append("count", String(count));
+
+          // Capture current counter value for this request
+          const counterAtThisRequest = globalKeyCounter;
+          globalKeyCounter += count;
+
+          requests.push(
+            (async () => {
+              try {
+                const res = await fetch(`${API_URL}/ai/generate-questions`, {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${token}` },
+                  body: formData,
+                });
+                const data = await res.json();
+                if (!res.ok || data.detail) {
+                  throw new Error(data.detail || "Generation failed");
+                }
+                return {
+                  generated: (data.generated || []).map((q, idx) => ({
+                    ...q,
+                    _key: counterAtThisRequest + idx,
+                    topic_id: Number(aiTopicId),
+                  })),
+                  warnings: data.validation_warnings || [],
+                };
+              } finally {
+                setAiProgress((prev) => {
+                  const previousUnits = Math.max(
+                    0,
+                    Math.min(
+                      totalBatches,
+                      Math.round(((prev.percent - 5) / 90) * totalBatches)
+                    )
+                  );
+                  const nextUnits = Math.min(totalBatches, previousUnits + 1);
+                  const percent = Math.min(95, Math.round((nextUnits / totalBatches) * 90) + 5);
+                  return {
+                    stage: nextUnits < totalBatches ? "Generating questions..." : "Validating output...",
+                    percent,
+                  };
+                });
+              }
+            })()
+          );
+      }
+
+      const results = await Promise.all(requests);
+
+      // Merge all results
+      const mergedQuestions = results.flatMap((r) => r.generated);
+      const mergedWarnings = results.flatMap((r) => r.warnings);
+
+      if (mergedQuestions.length === 0) {
+        throw new Error("No questions were generated. Please try again.");
+      }
+
+      setAiGeneratedQuestions(mergedQuestions);
+      setAiWarnings(mergedWarnings);
+      setAiStep(2);
+      setAiProgress({ stage: "Done", percent: 100 });
+    } catch (err) {
+      setAiError(err.message || "Generation failed");
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
+  const handleAiDiscardQuestion = (key) => {
+    setAiGeneratedQuestions((prev) => prev.filter((q) => q._key !== key));
+  };
+
+  const handleAiSaveAll = async () => {
+    if (!aiGeneratedQuestions.length) return;
+    setAiSaving(true);
+    setAiSaveError("");
+    try {
+      for (const q of aiGeneratedQuestions) {
+        const { _key, ...payload } = q;
+        const res = await fetch(`${API_URL}/questions/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const d = await res.json();
+          throw new Error(d.detail || "Failed to save question");
+        }
+      }
+      await refreshQuestions();
+      setAiDialogOpen(false);
+      resetAiDialog();
+      setFormSuccess(`${aiGeneratedQuestions.length} question(s) generated and saved.`);
+    } catch (err) {
+      setAiSaveError(err.message || "Failed to save questions");
+    } finally {
+      setAiSaving(false);
+    }
+  };
+
   // ─── Derived / computed state ────────────────────────────────────────────
 
   // Applies search text, topic filter, and sort to the full question list.
@@ -866,6 +1145,15 @@ function Questions() {
             disabled={deleting}
           >
             Create New Question
+          </Button>
+          <Button
+            variant="outlined"
+            color="secondary"
+            onClick={() => { resetAiDialog(); setAiDialogOpen(true); }}
+            sx={{ height: FILTER_CONTROL_HEIGHT }}
+            disabled={deleting}
+          >
+            Generate with AI
           </Button>
         </Box>
       </Box>
@@ -1259,6 +1547,452 @@ function Questions() {
           </Stack>
         </Box>
       </Drawer>
+      <Dialog
+        open={aiDialogOpen}
+        onClose={() => { if (!aiGenerating && !aiSaving) { setAiDialogOpen(false); resetAiDialog(); } }}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{ sx: { minHeight: 400 } }}
+      >
+        <DialogTitle>
+          {aiStep === 1 ? "Generate Questions with AI" : `Review Generated Questions (${aiGeneratedQuestions.length})`}
+        </DialogTitle>
+
+        <DialogContent dividers>
+          {/* ── Step 1: Upload form ── */}
+          {aiStep === 1 && (
+            <Stack spacing={3} sx={{ pt: 1 }}>
+              {aiError && <Alert severity="error">{aiError}</Alert>}
+
+              <Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  Upload a PDF, text file, or image and the AI will generate questions from its content.
+                </Typography>
+                <Button variant="outlined" component="label" disabled={aiGenerating}>
+                  {aiFile ? aiFile.name : "Choose File"}
+                  <input
+                    type="file"
+                    accept=".pdf,.txt,.jpeg,.jpg,.png,.webp"
+                    hidden
+                    onChange={(e) => { const f = e.target.files?.[0] || null; setAiFile(f); setAiError(""); analyzeFeasibility(f); e.target.value = ""; }}
+                  />
+                </Button>
+              </Box>
+
+              <FormControl fullWidth>
+                <InputLabel>Topic</InputLabel>
+                <Select
+                  value={aiTopicId}
+                  label="Topic"
+                  onChange={(e) => setAiTopicId(e.target.value)}
+                >
+                  {topics.map((t) => (
+                    <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
+              <FormControl fullWidth>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  Question Types
+                </Typography>
+                <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 1 }}>
+                  {QUESTION_TYPES.map((type) => {
+                    const rawScore = aiFileFeasibility?.scores?.[type];
+                    const feasLabel = rawScore == null
+                      ? null
+                      : rawScore >= 0.6 ? "good"
+                      : rawScore >= 0.3 ? "warn"
+                      : "poor";
+                    return (
+                      <FormControlLabel
+                        key={type}
+                        control={
+                          <Checkbox
+                            checked={aiSelectedTypes.has(type)}
+                            onChange={(e) => {
+                              const newSet = new Set(aiSelectedTypes);
+                              if (e.target.checked) {
+                                newSet.add(type);
+                              } else {
+                                newSet.delete(type);
+                              }
+                              setAiSelectedTypes(newSet);
+                            }}
+                          />
+                        }
+                        label={
+                          <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+                            <span>{type}</span>
+                            {aiFeasibilityLoading && (
+                              <Typography variant="caption" color="text.disabled">scoring…</Typography>
+                            )}
+                            {!aiFeasibilityLoading && feasLabel && (
+                              <Chip
+                                size="small"
+                                label={
+                                  feasLabel === "good"
+                                    ? `✓ ${Math.round(rawScore * 100)}%`
+                                    : feasLabel === "warn"
+                                    ? `~ ${Math.round(rawScore * 100)}%`
+                                    : `✗ ${Math.round(rawScore * 100)}%`
+                                }
+                                color={feasLabel === "good" ? "success" : feasLabel === "warn" ? "warning" : "error"}
+                                sx={{ height: 18, fontSize: "0.6rem", pointerEvents: "none" }}
+                              />
+                            )}
+                          </Box>
+                        }
+                      />
+                    );
+                  })}
+                </Box>
+                {aiFileFeasibility?.scores && (() => {
+                  const poorSelected = orderedSelectedTypes.filter(
+                    (t) => (aiFileFeasibility.scores[t] ?? 1) < 0.3
+                  );
+                  return poorSelected.length > 0 ? (
+                    <Alert severity="warning" sx={{ mt: 0.5 }}>
+                      {poorSelected.join(", ")} score{poorSelected.length > 1 ? "" : "s"} below 30% for this document.
+                      The AI may generate low-quality or hallucinated questions for {poorSelected.length > 1 ? "these types" : "this type"}.
+                      Consider deselecting {poorSelected.length > 1 ? "them" : "it"} or choosing a different document.
+                    </Alert>
+                  ) : null;
+                })()}
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  {aiFileFeasibility?.scores && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                      Scores are AI-assessed suitability from the uploaded document.
+                    </Typography>
+                  )}
+                  Split logic: for each selected difficulty, total questions are auto-allocated across checked types.
+                  Lower difficulty leans toward MCQ/SHORT, higher difficulty leans toward MULTI_MCQ/OPEN,
+                  and NUMERIC is emphasized around medium difficulty.
+                </Typography>
+                <Box sx={{ mt: 1, display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+                  {QUESTION_TYPES.filter((type) => aiSelectedTypes.has(type)).map((type) => (
+                    <Chip key={type} size="small" variant="outlined" label={`${type}: ${TYPE_BLOOM_MAP[type]}`} />
+                  ))}
+                </Box>
+              </FormControl>
+
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  Questions per Difficulty (1–5)
+                </Typography>
+                <Box sx={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 1 }}>
+                  {[1, 2, 3, 4, 5].map((diff) => (
+                    <TextField
+                      key={diff}
+                      label={`L${diff}`}
+                      type="number"
+                      size="small"
+                      value={aiDifficultyDistribution[diff] || 0}
+                      onChange={(e) => {
+                        const newVal = Math.max(0, Math.min(10, parseInt(e.target.value) || 0));
+                        setAiDifficultyDistribution((prev) => ({ ...prev, [diff]: newVal }));
+                      }}
+                      inputProps={{ min: 0, max: 10, step: 1 }}
+                    />
+                  ))}
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  Total: {Object.values(aiDifficultyDistribution).reduce((a, b) => a + b, 0)} questions
+                </Typography>
+              </Box>
+
+              {orderedSelectedTypes.length > 0 && plannedTypeSplitByDifficulty.length > 0 && (
+                <Box sx={{ p: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Planned Split Preview
+                  </Typography>
+                  {plannedTypeSplitByDifficulty.map(({ level, requested, split }) => (
+                    <Box key={level} sx={{ mb: 1 }}>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                        Difficulty L{level}: {requested} question{requested === 1 ? "" : "s"}
+                      </Typography>
+                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+                        {orderedSelectedTypes
+                          .filter((type) => (split[type] || 0) > 0)
+                          .map((type) => (
+                            <Chip
+                              key={`${level}-${type}`}
+                              size="small"
+                              variant="outlined"
+                              label={`${type}: ${split[type]}`}
+                            />
+                          ))}
+                      </Box>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+
+              {aiGenerating && (
+                <Box sx={{ mt: 1 }}>
+                  <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.5 }}>
+                    <Typography variant="body2" color="text.secondary">
+                      {aiProgress.stage || "Starting..."}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {aiProgress.percent}%
+                    </Typography>
+                  </Box>
+                  <LinearProgress variant="determinate" value={aiProgress.percent} />
+                </Box>
+              )}
+            </Stack>
+          )}
+
+          {/* ── Step 2: Review ── */}
+          {aiStep === 2 && (
+            <Stack spacing={2} sx={{ pt: 1 }}>
+              {aiWarnings.length > 0 && (
+                <Alert severity="warning">
+                  <Typography variant="body2" fontWeight="bold" sx={{ mb: 0.5 }}>
+                    AI output was auto-corrected ({aiWarnings.length} issue{aiWarnings.length > 1 ? "s" : ""}):
+                  </Typography>
+                  {aiWarnings.map((w, i) => (
+                    <Typography key={i} variant="body2">• {w}</Typography>
+                  ))}
+                </Alert>
+              )}
+
+              {aiSaveError && <Alert severity="error">{aiSaveError}</Alert>}
+
+              {aiGeneratedQuestions.length === 0 && (
+                <Alert severity="info">All questions have been discarded.</Alert>
+              )}
+
+              {aiGeneratedQuestions.map((q) => {
+                const isEditing = aiEditingKey === q._key;
+                const optionEntries = q.options && typeof q.options === "object" && !Array.isArray(q.options)
+                  ? Object.entries(q.options).sort(([a], [b]) => a.localeCompare(b))
+                  : [];
+                return (
+                  <Paper key={q._key} variant="outlined" sx={{ p: 2 }}>
+                    <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 1 }}>
+                      <Box sx={{ flex: 1 }}>
+                        <Box sx={{ display: "flex", gap: 1, mb: 1, flexWrap: "wrap" }}>
+                          <Chip label={q.type} size="small" color="primary" variant="outlined" />
+                          <Chip label={`Difficulty: ${q.difficulty}`} size="small" variant="outlined" />
+                        </Box>
+
+                        {isEditing ? (
+                          <Stack spacing={1.5} sx={{ mt: 1 }}>
+                            <TextField
+                              label="Question Text"
+                              fullWidth
+                              multiline
+                              minRows={2}
+                              size="small"
+                              value={q.text}
+                              onChange={(e) => updateAiQuestion(q._key, { text: e.target.value })}
+                            />
+
+                            {["MCQ", "MULTI_MCQ"].includes(q.type) && optionEntries.length > 0 && (
+                              <Box>
+                                <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Options</Typography>
+                                {optionEntries.map(([key, val]) => (
+                                  <Box key={key} sx={{ display: "flex", gap: 1, mb: 0.5, alignItems: "center" }}>
+                                    <Typography variant="body2" sx={{ minWidth: 20 }}>{key}:</Typography>
+                                    <TextField
+                                      size="small"
+                                      fullWidth
+                                      value={val}
+                                      onChange={(e) =>
+                                        updateAiQuestion(q._key, { options: { ...q.options, [key]: e.target.value } })
+                                      }
+                                    />
+                                  </Box>
+                                ))}
+                              </Box>
+                            )}
+
+                            {q.type === "MCQ" && (
+                              <FormControl size="small" fullWidth>
+                                <InputLabel>Answer</InputLabel>
+                                <Select
+                                  value={q.answer ?? ""}
+                                  label="Answer"
+                                  onChange={(e) => updateAiQuestion(q._key, { answer: e.target.value })}
+                                >
+                                  {optionEntries.map(([key]) => (
+                                    <MenuItem key={key} value={key}>{key}</MenuItem>
+                                  ))}
+                                </Select>
+                              </FormControl>
+                            )}
+
+                            {q.type === "MULTI_MCQ" && (
+                              <Box>
+                                <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Correct Answers</Typography>
+                                {optionEntries.map(([key]) => (
+                                  <FormControlLabel
+                                    key={key}
+                                    control={
+                                      <Checkbox
+                                        size="small"
+                                        checked={Array.isArray(q.answer) && q.answer.includes(key)}
+                                        onChange={(e) => {
+                                          const current = Array.isArray(q.answer) ? q.answer : [];
+                                          updateAiQuestion(q._key, {
+                                            answer: e.target.checked
+                                              ? [...current, key]
+                                              : current.filter((k) => k !== key),
+                                          });
+                                        }}
+                                      />
+                                    }
+                                    label={key}
+                                  />
+                                ))}
+                              </Box>
+                            )}
+
+                            {["NUMERIC", "SHORT", "OPEN"].includes(q.type) && (
+                              <TextField
+                                label="Answer"
+                                fullWidth
+                                size="small"
+                                type={q.type === "NUMERIC" ? "number" : "text"}
+                                multiline={q.type !== "NUMERIC"}
+                                minRows={q.type !== "NUMERIC" ? 2 : undefined}
+                                value={q.answer ?? ""}
+                                onChange={(e) =>
+                                  updateAiQuestion(q._key, {
+                                    answer: q.type === "NUMERIC"
+                                      ? (e.target.value === "" ? "" : Number(e.target.value))
+                                      : e.target.value,
+                                  })
+                                }
+                              />
+                            )}
+
+                            {q.type === "NUMERIC" && (
+                              <TextField
+                                label="Tolerance"
+                                fullWidth
+                                size="small"
+                                type="number"
+                                value={q.tolerance ?? ""}
+                                onChange={(e) =>
+                                  updateAiQuestion(q._key, {
+                                    tolerance: e.target.value === "" ? undefined : Number(e.target.value),
+                                  })
+                                }
+                              />
+                            )}
+
+                            {q.type === "SHORT" && Array.isArray(q.keywords) && (
+                              <TextField
+                                label="Keywords (comma-separated)"
+                                fullWidth
+                                size="small"
+                                value={q.keywords.join(", ")}
+                                onChange={(e) =>
+                                  updateAiQuestion(q._key, {
+                                    keywords: e.target.value.split(",").map((k) => k.trim()).filter(Boolean),
+                                  })
+                                }
+                              />
+                            )}
+                          </Stack>
+                        ) : (
+                          <>
+                            <Typography variant="body1" sx={{ mb: 1 }}>{q.text}</Typography>
+
+                            {q.options && typeof q.options === "object" && !Array.isArray(q.options) && (
+                              <Box sx={{ pl: 1, mb: 1 }}>
+                                {Object.entries(q.options).map(([key, val]) => (
+                                  <Typography key={key} variant="body2" color="text.secondary">
+                                    {key}: {val}
+                                  </Typography>
+                                ))}
+                              </Box>
+                            )}
+
+                            {q.keywords && Array.isArray(q.keywords) && (
+                              <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                                Keywords: {q.keywords.join(", ")}
+                              </Typography>
+                            )}
+
+                            <Typography variant="body2" color="success.main">
+                              Answer:{" "}
+                              {Array.isArray(q.answer) ? q.answer.join(", ") : String(q.answer ?? "")}
+                              {q.tolerance != null && q.type === "NUMERIC" ? ` (±${q.tolerance})` : ""}
+                            </Typography>
+
+                            {q.explanation && (
+                              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                                Explanation: {q.explanation}
+                              </Typography>
+                            )}
+                          </>
+                        )}
+                      </Box>
+
+                      <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, flexShrink: 0 }}>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => setAiEditingKey(isEditing ? null : q._key)}
+                          disabled={aiSaving}
+                        >
+                          {isEditing ? "Done" : "Edit"}
+                        </Button>
+                        <Button
+                          size="small"
+                          color="error"
+                          variant="outlined"
+                          onClick={() => { if (isEditing) setAiEditingKey(null); handleAiDiscardQuestion(q._key); }}
+                          disabled={aiSaving}
+                        >
+                          Discard
+                        </Button>
+                      </Box>
+                    </Box>
+                  </Paper>
+                );
+              })}
+
+              {aiSaving && <LinearProgress />}
+            </Stack>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          {aiStep === 1 && (
+            <>
+              <Button onClick={() => { setAiDialogOpen(false); resetAiDialog(); }} disabled={aiGenerating}>
+                Cancel
+              </Button>
+              <Button
+                variant="contained"
+                onClick={handleAiGenerate}
+                disabled={aiGenerating || !aiFile || !aiTopicId || aiSelectedTypes.size === 0 || Object.values(aiDifficultyDistribution).reduce((a, b) => a + b, 0) === 0}
+              >
+                {aiGenerating ? "Generating…" : "Generate Questions"}
+              </Button>
+            </>
+          )}
+          {aiStep === 2 && (
+            <>
+              <Button onClick={() => { setAiStep(1); setAiSaveError(""); }} disabled={aiSaving}>
+                Back
+              </Button>
+              <Button
+                variant="contained"
+                onClick={handleAiSaveAll}
+                disabled={aiSaving || aiGeneratedQuestions.length === 0}
+              >
+                {aiSaving ? "Saving…" : `Save ${aiGeneratedQuestions.length} Question${aiGeneratedQuestions.length !== 1 ? "s" : ""}`}
+              </Button>
+            </>
+          )}
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

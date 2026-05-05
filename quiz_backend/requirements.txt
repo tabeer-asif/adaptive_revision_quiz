@@ -5,3 +5,5 @@ fsrs
 rapidfuzz
 python-dotenv
 python-multipart
+google-genai
+nltk

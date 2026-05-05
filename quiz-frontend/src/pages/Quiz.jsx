@@ -13,8 +13,11 @@ import {
   CircularProgress,
   Alert,
   LinearProgress,
+  Paper,
 } from "@mui/material";
+import SmartToyIcon from "@mui/icons-material/SmartToy";
 import { useNavigate, useLocation } from "react-router-dom";
+import AiChatPanel from "../components/AiChatPanel";
 
 const API_URL = process.env.REACT_APP_API_URL;
 const SUPPORTED_TYPES = ["MCQ", "MULTI_MCQ", "NUMERIC", "SHORT", "OPEN"];
@@ -33,6 +36,11 @@ function Quiz() {
   const [awaitingOpenRating, setAwaitingOpenRating] = useState(false);
   const [openResponseTimeSeconds, setOpenResponseTimeSeconds] = useState(null);
   const [submittingRating, setSubmittingRating] = useState(false);
+  const [explanationLoading, setExplanationLoading] = useState(false);
+  const [explanationData, setExplanationData] = useState(null);
+  const [explanationError, setExplanationError] = useState("");
+  const [lastSubmit, setLastSubmit] = useState(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -98,6 +106,11 @@ function Quiz() {
       setCurrentQuestion(data);
       setLoading(false);
       setStartTime(Date.now());
+      setLastSubmit(null);
+      setExplanationData(null);
+      setExplanationLoading(false);
+      setExplanationError("");
+      setChatOpen(false);
       return true;
     } catch (err) {
       console.error(err);
@@ -279,6 +292,7 @@ function Quiz() {
           setCorrectAnswer(data.correct_answer || "");
           setAwaitingOpenRating(true);
           setOpenResponseTimeSeconds(responseTimeSeconds);
+          setLastSubmit({ answer: payloadAnswer, responseTime: responseTimeSeconds });
           return;
         }
 
@@ -287,6 +301,7 @@ function Quiz() {
         }
         setCorrectAnswer(data.correct_answer || "");
         setFeedback(data.correct ? "✅ Correct!" : "❌ Wrong!");
+        setLastSubmit({ answer: payloadAnswer, responseTime: responseTimeSeconds });
       } catch (err) {
         console.error(err);
         setFeedback(err instanceof Error ? err.message : "Error submitting answer.");
@@ -315,6 +330,7 @@ function Quiz() {
       }
       setCorrectAnswer(data.correct_answer || "");
       setFeedback(data.correct ? "✅ Correct!" : "❌ Wrong!");
+      setLastSubmit({ answer: payloadAnswer, responseTime: responseTimeSeconds });
     } catch (err) {
       console.error(err);
       setFeedback(err instanceof Error ? err.message : "Error submitting answer.");
@@ -356,6 +372,7 @@ function Quiz() {
       setAwaitingOpenRating(false);
       setOpenResponseTimeSeconds(null);
       setFeedback("Response saved.");
+      setLastSubmit((prev) => prev ? { ...prev, selfRating: rating } : null);
     } catch (err) {
       console.error(err);
       setFeedback(err instanceof Error ? err.message : "Error submitting answer.");
@@ -372,6 +389,11 @@ function Quiz() {
     setAwaitingOpenRating(false);
     setOpenResponseTimeSeconds(null);
     setSubmittingRating(false);
+    setExplanationData(null);
+    setExplanationLoading(false);
+    setExplanationError("");
+    setLastSubmit(null);
+    setChatOpen(false);
 
     const answeredCount = questionCount + 1;
     setQuestionCount(answeredCount);
@@ -381,6 +403,33 @@ function Quiz() {
     const hasNextQuestion = await fetchNextQuestion();
     if (!hasNextQuestion) {
       navigate("/results", { state: { score, total: answeredCount } });
+    }
+  };
+
+  const handleExplain = async () => {
+    if (!currentQuestion || !lastSubmit) return;
+    setExplanationLoading(true);
+    setExplanationData(null);
+    setExplanationError("");
+    try {
+      const res = await fetch(`${API_URL}/explanations/explain`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          question_id: currentQuestion.id,
+          topic_id: currentQuestion.topic_id,
+          selected_option: lastSubmit.answer,
+          self_rating: lastSubmit.selfRating ?? null,
+          response_time: lastSubmit.responseTime,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to fetch explanation");
+      setExplanationData(data);
+    } catch (err) {
+      setExplanationError(err instanceof Error ? err.message : "Error fetching explanation.");
+    } finally {
+      setExplanationLoading(false);
     }
   };
 
@@ -483,14 +532,25 @@ function Quiz() {
               >
                 {feedback}
               </Alert>
-              <Button
-                variant="outlined"
-                fullWidth
-                sx={{ mt: 2 }}
-                onClick={handleNext}
-              >
-                Next
-              </Button>
+              <Box sx={{ display: "flex", gap: 1, mt: 2 }}>
+                <Button
+                  variant="outlined"
+                  fullWidth
+                  onClick={handleNext}
+                >
+                  Next
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="secondary"
+                  fullWidth
+                  onClick={handleExplain}
+                  disabled={explanationLoading}
+                  startIcon={explanationLoading ? <CircularProgress size={16} /> : null}
+                >
+                  {explanationLoading ? "Loading…" : "Explain this"}
+                </Button>
+              </Box>
             </>
           )}
 
@@ -498,6 +558,30 @@ function Quiz() {
             <Alert severity="info" sx={{ mt: 2 }}>
               Correct answer: {correctAnswer}
             </Alert>
+          )}
+
+          {explanationError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {explanationError}
+            </Alert>
+          )}
+
+          {explanationData && (
+            <Box sx={{ mt: 2 }}>
+              <Paper elevation={3} sx={{ p: 2, borderRadius: 2, borderLeft: "3px solid", borderLeftColor: "primary.main" }}>
+                <Typography variant="body2" sx={{ color: "inherit" }}>{explanationData.explanation}</Typography>
+              </Paper>
+              <Button
+                variant="outlined"
+                color="secondary"
+                size="small"
+                startIcon={<SmartToyIcon />}
+                sx={{ mt: 1 }}
+                onClick={() => setChatOpen(true)}
+              >
+                Still confused? Ask a question
+              </Button>
+            </Box>
           )}
 
           {awaitingOpenRating && (
@@ -543,6 +627,15 @@ function Quiz() {
           )}
         </CardContent>
       </Card>
+
+      <AiChatPanel
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        question={currentQuestion}
+        userAnswer={lastSubmit ? { selected_option: lastSubmit.answer, self_rating: lastSubmit.selfRating ?? null } : {}}
+        topicId={currentQuestion?.topic_id}
+        initialExplanation={explanationData?.explanation ?? null}
+      />
     </Box>
   );
 }
