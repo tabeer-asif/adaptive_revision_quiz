@@ -11,3 +11,6 @@ global.TextDecoder = TextDecoder;
 if (!process.env.REACT_APP_API_URL) {
 	process.env.REACT_APP_API_URL = "http://api.test";
 }
+
+// jsdom does not implement scrollIntoView; stub it to prevent test errors.
+window.HTMLElement.prototype.scrollIntoView = jest.fn();

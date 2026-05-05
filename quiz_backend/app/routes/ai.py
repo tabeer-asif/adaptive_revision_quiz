@@ -36,7 +36,7 @@ TYPE_DIFFICULTY_WEIGHTS = {
 SHORT_KEYWORD_STOPWORDS = STOP_WORDS_EN
 
 
-def get_ai_service_components():
+def _get_ai_service_components():
     try:
         from app.services.ai import (
             generate_questions_from_file,
@@ -308,7 +308,7 @@ async def score_feasibility(
     Scores how suitable a document is for each question type.
     Returns {"MCQ": 0.9, "NUMERIC": 0.1, ...} with values 0.0-1.0.
     """
-    _, _, score_document_feasibility, SUPPORTED_MIME_TYPES, MAX_FILE_SIZE_BYTES = get_ai_service_components()
+    _, _, score_document_feasibility, SUPPORTED_MIME_TYPES, MAX_FILE_SIZE_BYTES = _get_ai_service_components()
 
     suffix = pathlib.Path(file.filename or "").suffix.lower()
     mime_type = SUPPORTED_MIME_TYPES.get(suffix)
@@ -337,7 +337,7 @@ async def generate_questions(
     if not settings.AI_ENABLED or not settings.GEMINI_API_KEY:
         raise HTTPException(503, "AI features are not enabled.")
 
-    _, generate_all_questions, _, SUPPORTED_MIME_TYPES, MAX_FILE_SIZE_BYTES = get_ai_service_components()
+    _, generate_all_questions, _, SUPPORTED_MIME_TYPES, MAX_FILE_SIZE_BYTES = _get_ai_service_components()
 
     # Validate question type
     valid_types = {"MCQ", "MULTI_MCQ", "SHORT", "NUMERIC", "OPEN"}

@@ -109,7 +109,7 @@ function AiChatPanel({
       anchor="right"
       open={open}
       onClose={onClose}
-      variant="persistent"
+      variant="temporary"
       PaperProps={{
         sx: {
           width: { xs: "100%", sm: 400 },
