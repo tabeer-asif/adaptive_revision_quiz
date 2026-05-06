@@ -480,7 +480,14 @@ function Quiz() {
         p: 2,
       }}
     >
-      <Card sx={{ width: 500, p: 2, borderRadius: 3 }}>
+      <Card
+        sx={{
+          width: "100%",
+          maxWidth: { xs: 560, md: 760 },
+          p: 2,
+          borderRadius: 3,
+        }}
+      >
         <CardContent>
           {/* Progress Bar */}
           <Box sx={{ width: "100%", mb: 2 }}>

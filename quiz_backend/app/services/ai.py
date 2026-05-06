@@ -497,7 +497,7 @@ async def score_document_feasibility(
             os.unlink(tmp_path)
 
 
-# ── Post answer explanation ──────────────────────────────────────────
+# ------- Post answer explanation -------
 
 EXPLANATION_PROMPT = """You are a patient, expert tutor helping a student understand a quiz answer.
 
@@ -629,7 +629,7 @@ async def generate_explanation(
     return {"explanation": text or "No explanation available."}
 
 
-# ── Contextual chat ──────────────────────────────────────────────────
+# ------ Contextual chat ------
 
 CHAT_SYSTEM_PROMPT = """You are a patient, knowledgeable tutor helping a student understand a specific question they just answered.
 
@@ -667,7 +667,7 @@ async def generate_chat_reply(
         ability_description=ability_description(theta),
     )
 
-    # Build alternating-turn prompt for Gemini
+    # Build alternating turn prompt 
     parts = [system_prompt]
     for msg in history:
         if msg["role"] == "user":
