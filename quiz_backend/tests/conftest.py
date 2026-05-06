@@ -46,6 +46,9 @@ class StubQuery:
     def limit(self, *args, **kwargs):
         return self
 
+    def order(self, *args, **kwargs):
+        return self
+
     @property
     def not_(self):
         return self
