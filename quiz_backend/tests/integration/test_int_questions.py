@@ -60,6 +60,7 @@ _NEW_QUESTION = {
 class TestCreateQuestion:
     def test_mcq_created_successfully(self, client, auth_headers, make_db):
         make_db({
+            ("topics", "select"): [{"data": [{"id": 1}]}],
             ("questions", "insert"): [{"data": [_CREATED_QUESTION]}]
         })
 
@@ -73,7 +74,10 @@ class TestCreateQuestion:
     def test_short_question_created(self, client, auth_headers, make_db):
         created = {**_CREATED_QUESTION, "type": "SHORT", "answer": "Photosynthesis",
                    "options": None, "keywords": ["photosynthesis"]}
-        make_db({("questions", "insert"): [{"data": [created]}]})
+        make_db({
+            ("topics", "select"): [{"data": [{"id": 1}]}],
+            ("questions", "insert"): [{"data": [created]}]
+        })
 
         r = client.post("/questions/create", json=SHORT_PAYLOAD, headers=auth_headers)
 
@@ -91,7 +95,10 @@ class TestCreateQuestion:
 
     def test_db_insert_failure_returns_500(self, client, auth_headers, make_db):
         # Stub returns no data → route raises 500
-        make_db({("questions", "insert"): [{"data": None}]})
+        make_db({
+            ("topics", "select"): [{"data": [{"id": 1}]}],
+            ("questions", "insert"): [{"data": None}]
+        })
 
         r = client.post("/questions/create", json=MCQ_PAYLOAD, headers=auth_headers)
 
@@ -108,6 +115,7 @@ class TestUpdateQuestion:
     def test_update_success(self, client, auth_headers, make_db):
         updated = {**_CREATED_QUESTION, "text": "Updated text"}
         make_db({
+            ("topics", "select"): [{"data": [{"id": 1}]}],
             ("questions", "select"): [
                 # ownership check
                 {"data": {"id": 10, "created_by": USER_ID, "answer": "B"}}
