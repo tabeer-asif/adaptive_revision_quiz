@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import MathText from "../components/MathText";
 import {
   Box,
   Typography,
@@ -1211,7 +1212,7 @@ function Questions() {
                     onChange={() => toggleQuestionSelection(q.id)}
                   />
                 </TableCell>
-                <TableCell>{q.text}</TableCell>
+                <TableCell component="div"><MathText text={q.text} /></TableCell>
                 <TableCell>{q.topic_name}</TableCell>
                 <TableCell>{q.difficulty}</TableCell>
                 <TableCell>
@@ -1900,13 +1901,13 @@ function Questions() {
                           </Stack>
                         ) : (
                           <>
-                            <Typography variant="body1" sx={{ mb: 1 }}>{q.text}</Typography>
+                            <Typography variant="body1" component="div" sx={{ mb: 1 }}><MathText text={q.text} /></Typography>
 
                             {q.options && typeof q.options === "object" && !Array.isArray(q.options) && (
                               <Box sx={{ pl: 1, mb: 1 }}>
                                 {Object.entries(q.options).map(([key, val]) => (
-                                  <Typography key={key} variant="body2" color="text.secondary">
-                                    {key}: {val}
+                                  <Typography key={key} variant="body2" component="div" color="text.secondary">
+                                    {key}: <MathText text={val} />
                                   </Typography>
                                 ))}
                               </Box>
@@ -1918,15 +1919,15 @@ function Questions() {
                               </Typography>
                             )}
 
-                            <Typography variant="body2" color="success.main">
+                            <Typography variant="body2" component="div" color="success.main">
                               Answer:{" "}
-                              {Array.isArray(q.answer) ? q.answer.join(", ") : String(q.answer ?? "")}
+                              <MathText text={Array.isArray(q.answer) ? q.answer.join(", ") : String(q.answer ?? "")} />
                               {q.tolerance != null && q.type === "NUMERIC" ? ` (±${q.tolerance})` : ""}
                             </Typography>
 
                             {q.explanation && (
-                              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                                Explanation: {q.explanation}
+                              <Typography variant="body2" component="div" color="text.secondary" sx={{ mt: 0.5 }}>
+                                Explanation: <MathText text={q.explanation} />
                               </Typography>
                             )}
                           </>

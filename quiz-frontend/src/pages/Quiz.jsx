@@ -18,6 +18,7 @@ import {
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import { useNavigate, useLocation } from "react-router-dom";
 import AiChatPanel from "../components/AiChatPanel";
+import MathText from "../components/MathText";
 
 const API_URL = process.env.REACT_APP_API_URL;
 const SUPPORTED_TYPES = ["MCQ", "MULTI_MCQ", "NUMERIC", "SHORT", "OPEN"];
@@ -188,7 +189,7 @@ function Quiz() {
               key={key}
               value={key}
               control={<Radio />}
-              label={`${key}: ${value}`}
+              label={<><strong>{key}:</strong> <MathText text={value} /></>}
               disabled={isInputLocked}
             />
           ))}
@@ -215,7 +216,7 @@ function Quiz() {
                   disabled={isInputLocked}
                 />
               }
-              label={`${key}: ${value}`}
+              label={<><strong>{key}:</strong> <MathText text={value} /></>}
             />
           ))}
         </Box>
@@ -505,8 +506,8 @@ function Quiz() {
           <Typography variant="h5" gutterBottom>
             Question {questionCount + 1}
           </Typography>
-          <Typography variant="subtitle1" sx={{ mb: 2 }}>
-            {currentQuestion.text}
+          <Typography variant="subtitle1" component="div" sx={{ mb: 2 }}>
+            <MathText text={currentQuestion.text} />
           </Typography>
 
           {currentQuestion.image_url && (
@@ -562,8 +563,8 @@ function Quiz() {
           )}
 
           {correctAnswer && (
-            <Alert severity="info" sx={{ mt: 2 }}>
-              Correct answer: {correctAnswer}
+            <Alert severity="info" sx={{ mt: 2 }} component="div">
+              Correct answer: <MathText text={correctAnswer} />
             </Alert>
           )}
 
@@ -576,7 +577,9 @@ function Quiz() {
           {explanationData && (
             <Box sx={{ mt: 2 }}>
               <Paper elevation={3} sx={{ p: 2, borderRadius: 2, borderLeft: "3px solid", borderLeftColor: "primary.main" }}>
-                <Typography variant="body2" sx={{ color: "inherit" }}>{explanationData.explanation}</Typography>
+                <Typography variant="body2" component="div" sx={{ color: "inherit" }}>
+                  <MathText text={explanationData.explanation} />
+                </Typography>
               </Paper>
               <Button
                 variant="outlined"

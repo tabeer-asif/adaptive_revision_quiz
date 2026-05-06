@@ -14,6 +14,7 @@ import SendIcon from "@mui/icons-material/Send";
 import CloseIcon from "@mui/icons-material/Close";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import PersonIcon from "@mui/icons-material/Person";
+import MathText from "./MathText";
 
 const API_URL = process.env.REACT_APP_API_URL;
 
@@ -161,6 +162,7 @@ function AiChatPanel({
         </Typography>
         <Typography
           variant="body2"
+          component="div"
           sx={{
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -169,7 +171,7 @@ function AiChatPanel({
             WebkitBoxOrient: "vertical",
           }}
         >
-          {question?.text}
+          <MathText text={question?.text} />
         </Typography>
       </Box>
 
@@ -236,9 +238,10 @@ function AiChatPanel({
             >
               <Typography
                 variant="body2"
+                component="div"
                 sx={{ whiteSpace: "pre-wrap", color: "inherit" }}
               >
-                {msg.content}
+                <MathText text={msg.content} />
               </Typography>
             </Paper>
           </Box>

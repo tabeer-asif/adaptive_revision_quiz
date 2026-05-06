@@ -62,6 +62,7 @@ IMPORTANT:
 - Vary which parts of the document you draw from
 - Match the difficulty level strictly
 - Write question text as standalone, self contained questions - do NOT use phrases like "according to the document", "based on the material", "from the study material", "in the text", "as mentioned", or any reference to a document/material/resource. The student will not have access to the source material during the quiz.
+- For any mathematical expressions, formulas, symbols or units use LaTeX delimiters: $...$ for inline math, $$...$$ for display/block equations
 
 Return ONLY a valid JSON array, no markdown, no explanation:
 [
@@ -106,6 +107,7 @@ TYPE_RULES = {
 - tolerance: suggest appropriate tolerance as float e.g. 0.1
 - options: null
 - keywords: null
+- Use LaTeX ($...$) for any formulas, symbols, or units in the question text e.g. $F = ma$, $9.81\\, \\text{m/s}^2$
 """,
     "OPEN": """
 - answer is a model answer paragraph (2-4 sentences)

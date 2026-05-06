@@ -252,7 +252,7 @@ describe("Quiz page", () => {
     await userEvent.type(screen.getByLabelText(/Your answer/i), "It is when plants breathe");
     await userEvent.click(screen.getByRole("button", { name: /Submit/i }));
 
-    await screen.findByText("Correct answer: Plants convert light to energy.");
+    await screen.findByText(/Plants convert light to energy/i);
     expect(screen.getByRole("button", { name: /Easy/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Again/i })).toBeInTheDocument();
 
