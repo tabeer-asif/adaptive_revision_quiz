@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Alert,
@@ -76,13 +76,13 @@ function Analytics() {
     if (thetaSeries.length > 0 && thetaTopicFilter === null) {
       setThetaTopicFilter(String(thetaSeries[0].topic_id));
     }
-  }, [thetaSeries]);
+  }, [thetaSeries, thetaTopicFilter]);
 
   const activeThetaSeries = useMemo(() => {
     return thetaSeries.find((s) => String(s.topic_id) === String(thetaTopicFilter)) || null;
   }, [thetaSeries, thetaTopicFilter]);
 
-  const loadAnalytics = async () => {
+  const loadAnalytics = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
@@ -104,11 +104,11 @@ function Analytics() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [windowDays]);
 
   useEffect(() => {
     loadAnalytics();
-  }, [windowDays]);
+  }, [loadAnalytics]);
 
   return (
     <Box
