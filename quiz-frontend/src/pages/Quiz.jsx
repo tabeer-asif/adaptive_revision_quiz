@@ -577,7 +577,7 @@ function Quiz() {
           {explanationData && (
             <Box sx={{ mt: 2 }}>
               <Paper elevation={3} sx={{ p: 2, borderRadius: 2, borderLeft: "3px solid", borderLeftColor: "primary.main" }}>
-                <Typography variant="body2" component="div" sx={{ color: "inherit" }}>
+                <Typography variant="body2" component="div" sx={{ color: "inherit", whiteSpace: "pre-line" }}>
                   <MathText text={explanationData.explanation} />
                 </Typography>
               </Paper>

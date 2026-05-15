@@ -62,6 +62,7 @@ _DB_MODULE_PATHS = [
     "app.routes.uploads",
     "app.routes.ai",
     "app.routes.explanations",
+    "app.routes.analytics",
     "app.dependencies.question_validators",  # also imports supabase_db at module level
 ]
 

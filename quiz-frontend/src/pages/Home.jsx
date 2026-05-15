@@ -87,7 +87,7 @@ function Home() {
         p: 2,
       }}
     >
-      <Card sx={{ width: 400, p: 3, borderRadius: 3 }}>
+      <Card sx={{ width: 500, p: 3, borderRadius: 3 }}>
         <CardContent>
           <Typography variant="h4" align="center" gutterBottom>
             Welcome 👋
@@ -139,6 +139,15 @@ function Home() {
             onClick={() => navigate("/questions")}
           >
             View Question Database
+          </Button>
+
+          <Button
+            variant="outlined"
+            fullWidth
+            sx={{ mb: 2, height: 45 }}
+            onClick={() => navigate("/analytics")}
+          >
+            View Learning Analytics
           </Button>
 
           <Button

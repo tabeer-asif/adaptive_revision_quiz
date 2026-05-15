@@ -78,6 +78,17 @@ describe("Home page", () => {
     expect(mockNavigate).toHaveBeenCalledWith("/questions");
   });
 
+  it("navigates to /analytics when View Learning Analytics is clicked", async () => {
+    localStorage.setItem("token", "tok");
+    global.fetch.mockResolvedValue({ ok: true, json: async () => TOPICS });
+
+    renderHome();
+    await screen.findByRole("button", { name: /View Learning Analytics/i });
+
+    await userEvent.click(screen.getByRole("button", { name: /View Learning Analytics/i }));
+    expect(mockNavigate).toHaveBeenCalledWith("/analytics");
+  });
+
   it("clears storage and navigates to / on logout", async () => {
     localStorage.setItem("token", "tok");
     localStorage.setItem("user_id", "u1");

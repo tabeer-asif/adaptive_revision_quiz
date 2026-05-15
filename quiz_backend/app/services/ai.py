@@ -512,9 +512,18 @@ Recent accuracy on this topic: {accuracy_description}
 
 {type_specific_context}
 
-Write a clear, detailed explanation of why the correct answer is right. Reference the student's specific answer to make it personal. Explain the underlying concept thoroughly enough that the student genuinely understands — not just what the answer is, but why.
+Write a concise explanation in bullet points so it is quick to read.
 
-Tone: encouraging, not condescending. Specific to THIS question. Do not just repeat the correct answer — explain WHY it is correct. Plain prose only, no bullet points or section headers.
+Output rules:
+- 3 to 5 bullet points only
+- Each bullet must be one short sentence (max about 16 words)
+- Start each bullet with "- "
+- Keep total response under 90 words
+- Mention the student's answer briefly
+- Explain WHY the correct answer is right (not just what it is)
+- No headings, no intro/outro, no markdown code blocks
+
+Tone: encouraging, not condescending. Specific to THIS question.
 """
 
 _TYPE_SPECIFIC_CONTEXT = {

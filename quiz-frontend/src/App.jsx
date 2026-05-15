@@ -7,6 +7,7 @@ import Home from "./pages/Home";
 import Quiz from "./pages/Quiz";
 import Results from "./pages/Results";
 import Questions from "./pages/Questions";
+import Analytics from "./pages/Analytics";
 import PrivateRoute from "./components/PrivateRoute"; // ✅ import PrivateRoute
 
 function App() {
@@ -47,6 +48,14 @@ function App() {
           element={
             <PrivateRoute>
               <Results />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/analytics"
+          element={
+            <PrivateRoute>
+              <Analytics />
             </PrivateRoute>
           }
         />
