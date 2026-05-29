@@ -99,7 +99,12 @@ class TestExplain:
 
         assert r.status_code == 404
 
-    def test_ai_disabled_returns_503(self, client, auth_headers, monkeypatch):
+    def test_ai_disabled_returns_503(self, client, auth_headers, make_db, monkeypatch):
+        question_without_explanation = dict(_QUESTION)
+        question_without_explanation["explanation"] = ""
+        make_db({
+            ("questions", "select"): [{"data": question_without_explanation}],
+        })
         _patch_ai_services(monkeypatch, ai_enabled=False)
 
         r = client.post(
@@ -113,6 +118,25 @@ class TestExplain:
         )
 
         assert r.status_code == 503
+
+    def test_returns_stored_explanation_without_ai(self, client, auth_headers, make_db, monkeypatch):
+        make_db({
+            ("questions", "select"): [{"data": _QUESTION}],
+        })
+        _patch_ai_services(monkeypatch, ai_enabled=False)
+
+        r = client.post(
+            "/explanations/explain",
+            json={
+                "question_id": 1,
+                "topic_id": 10,
+                "selected_option": "B",
+            },
+            headers=auth_headers,
+        )
+
+        assert r.status_code == 200
+        assert r.json()["explanation"] == _QUESTION["explanation"]
 
     def test_requires_auth(self, client, no_auth):
         r = client.post(

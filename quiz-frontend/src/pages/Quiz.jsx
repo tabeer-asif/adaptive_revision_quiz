@@ -490,6 +490,15 @@ function Quiz() {
         }}
       >
         <CardContent>
+          <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mb: 1 }}>
+            <Button variant="outlined" size="small" onClick={() => navigate(-1)}>
+              Back
+            </Button>
+            <Button variant="outlined" size="small" onClick={() => navigate("/home")}>
+              Home
+            </Button>
+          </Box>
+
           {/* Progress Bar */}
           <Box sx={{ width: "100%", mb: 2 }}>
             <LinearProgress

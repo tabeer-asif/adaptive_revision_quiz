@@ -20,12 +20,9 @@ async def explain_answer(body: ExplanationRequest, user=Depends(get_current_user
     Called when the user clicks "Explain this" after submitting an answer.
     Personalised to their ability level (theta) and recent accuracy.
     """
-    if not settings.AI_ENABLED or not settings.GEMINI_API_KEY:
-        raise HTTPException(503, "AI features are not enabled.")
-
     # ── 1. Fetch question ──────────────────────────────────────────────
     q_res = supabase_db.table("questions") \
-        .select("text, type, options, answer, keywords, topic_id") \
+        .select("id, text, type, options, answer, keywords, topic_id, explanation") \
         .eq("id", body.question_id) \
         .single() \
         .execute()
@@ -39,7 +36,15 @@ async def explain_answer(body: ExplanationRequest, user=Depends(get_current_user
     if question.get("topic_id") != body.topic_id:
         raise HTTPException(400, "topic_id does not match the question's topic.")
 
-    # ── 3. Fetch user theta for this topic ─────────────────────────────
+    # ── 3. Prefer pre-generated explanation to avoid extra AI cost ─────
+    stored_explanation = (question.get("explanation") or "").strip()
+    if stored_explanation:
+        return {"explanation": stored_explanation}
+
+    if not settings.AI_ENABLED or not settings.GEMINI_API_KEY:
+        raise HTTPException(503, "AI features are not enabled.")
+
+    # ── 4. Fetch user theta for this topic ─────────────────────────────
     theta_res = supabase_db.table("user_topic_theta") \
         .select("theta, n_responses") \
         .eq("user_id", str(user.id)) \
@@ -48,7 +53,7 @@ async def explain_answer(body: ExplanationRequest, user=Depends(get_current_user
 
     theta = theta_res.data[0]["theta"] if theta_res.data else 0.0
 
-    # ── 4. Compute recent accuracy from review_logs ────────────────────
+    # ── 5. Compute recent accuracy from review_logs ────────────────────
     history_res = supabase_db.table("review_logs") \
         .select("correct") \
         .eq("user_id", str(user.id)) \
@@ -61,13 +66,13 @@ async def explain_answer(body: ExplanationRequest, user=Depends(get_current_user
     if history_res.data:
         recent_accuracy = sum(1 for r in history_res.data if r["correct"]) / len(history_res.data)
 
-    # ── 5. Build user_answer dict for the service ──────────────────────
+    # ── 6. Build user_answer dict for the service ──────────────────────
     user_answer = {
         "selected_option": body.selected_option,
         "self_rating": body.self_rating,
     }
 
-    # ── 6. Generate explanation ────────────────────────────────────────
+    # ── 7. Generate explanation ────────────────────────────────────────
     try:
         from app.services.ai import generate_explanation
         result = await generate_explanation(
@@ -76,6 +81,14 @@ async def explain_answer(body: ExplanationRequest, user=Depends(get_current_user
             theta=theta,
             recent_accuracy=recent_accuracy,
         )
+
+        generated_explanation = (result.get("explanation") or "").strip() if isinstance(result, dict) else ""
+        if generated_explanation:
+            # Cache fallback explanation so future clicks avoid another AI call.
+            supabase_db.table("questions") \
+                .update({"explanation": generated_explanation}) \
+                .eq("id", body.question_id) \
+                .execute()
     except Exception as exc:
         raise HTTPException(500, f"Explanation generation failed: {exc}")
 

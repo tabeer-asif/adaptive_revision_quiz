@@ -88,6 +88,7 @@ def create_question(payload: CreateQuestionRequest, user=Depends(get_current_use
         "type": payload.type,
         "options": payload.options,
         "answer": payload.answer,
+        "explanation": payload.explanation,
         "difficulty": payload.difficulty,
         "irt_a": payload.irt_a if payload.irt_a is not None else irt_defaults["irt_a"],
         "irt_b": payload.irt_b if payload.irt_b is not None else irt_defaults["irt_b"],
@@ -123,7 +124,7 @@ def update_question(question_id: int, payload: CreateQuestionRequest, user=Depen
     
     # Check ownership first — also fetch current answer for change detection
     q = supabase_db.table("questions") \
-        .select("id, created_by, answer") \
+        .select("id, created_by, answer, explanation") \
         .eq("id", question_id) \
         .single() \
         .execute()
@@ -156,6 +157,7 @@ def update_question(question_id: int, payload: CreateQuestionRequest, user=Depen
         "type": payload.type,
         "options": payload.options,
         "answer": payload.answer,
+        "explanation": payload.explanation if payload.explanation is not None else q.data.get("explanation"),
         "difficulty": payload.difficulty,
         "irt_a": payload.irt_a if payload.irt_a is not None else irt_defaults["irt_a"],
         "irt_b": payload.irt_b if payload.irt_b is not None else irt_defaults["irt_b"],

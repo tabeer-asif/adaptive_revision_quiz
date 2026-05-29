@@ -63,6 +63,15 @@ function Results() {
           <Button
             variant="outlined"
             fullWidth
+            sx={{ mb: 2 }}
+            onClick={() => navigate(-1)}
+          >
+            Back
+          </Button>
+
+          <Button
+            variant="outlined"
+            fullWidth
             onClick={() => navigate("/home")}
           >
             Back to Home

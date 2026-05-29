@@ -30,7 +30,10 @@ import {
   DialogActions,
   Chip,
   LinearProgress,
+  IconButton,
 } from "@mui/material";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import { useNavigate } from "react-router-dom";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const API_URL = process.env.REACT_APP_API_URL;
@@ -145,6 +148,7 @@ const isDueNow = (due) => {
 };
 
 function Questions() {
+  const navigate = useNavigate();
   // ── Data ──────────────────────────────────────────────────────────────────
   const [questions, setQuestions] = useState([]);     // full list from API
   const [topics, setTopics] = useState([]);           // all available topics
@@ -840,6 +844,11 @@ function Questions() {
   // Asks the backend AI to score how well each question type fits the uploaded document.
   const analyzeFeasibility = async (file) => {
     if (!file) { setAiFileFeasibility(null); return; }
+    if (!API_URL) {
+      setAiFileFeasibility(null);
+      setAiError("REACT_APP_API_URL is not configured.");
+      return;
+    }
     setAiFeasibilityLoading(true);
     setAiFileFeasibility(null);
     try {
@@ -853,9 +862,11 @@ function Questions() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Feasibility check failed");
       setAiFileFeasibility({ scores: data.scores });
-    } catch {
-      // Non-blocking — just clear the scores; user can still generate
+    } catch (err) {
+      // Non-blocking: show the error but still allow question generation.
       setAiFileFeasibility(null);
+      const message = err instanceof Error ? err.message : "Feasibility check failed";
+      setAiError(message);
     } finally {
       setAiFeasibilityLoading(false);
     }
@@ -1032,13 +1043,36 @@ function Questions() {
   // Unique topic names extracted from the loaded questions, used to populate the topic filter dropdown.
   const uniqueTopics = [...new Set(questions.map(q => q.topic_name))];
 
-  if (loading) return <CircularProgress />;
+  if (loading) {
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minHeight: "100vh",
+        }}
+      >
+        <CircularProgress />
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ p: 4 }}>
-      <Typography variant="h4" gutterBottom>
-        Question Database
-      </Typography>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1, flexWrap: "wrap", gap: 1 }}>
+        <Typography variant="h4" gutterBottom sx={{ mb: 0 }}>
+          Question Database
+        </Typography>
+        <Box sx={{ display: "flex", gap: 1 }}>
+          <Button variant="outlined" onClick={() => navigate(-1)}>
+            Back
+          </Button>
+          <Button variant="outlined" onClick={() => navigate("/home")}>
+            Home
+          </Button>
+        </Box>
+      </Box>
 
       {/* 🔍 Search */}
       <TextField
@@ -1569,15 +1603,33 @@ function Questions() {
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                   Upload a PDF, text file, or image and the AI will generate questions from its content.
                 </Typography>
-                <Button variant="outlined" component="label" disabled={aiGenerating}>
-                  {aiFile ? aiFile.name : "Choose File"}
-                  <input
-                    type="file"
-                    accept=".pdf,.txt,.jpeg,.jpg,.png,.webp"
-                    hidden
-                    onChange={(e) => { const f = e.target.files?.[0] || null; setAiFile(f); setAiError(""); analyzeFeasibility(f); e.target.value = ""; }}
-                  />
-                </Button>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+                  <Button variant="outlined" component="label" disabled={aiGenerating}>
+                    {aiFile ? aiFile.name : "Choose File"}
+                    <input
+                      type="file"
+                      accept=".pdf,.txt,.jpeg,.jpg,.png,.webp"
+                      hidden
+                      onChange={(e) => { const f = e.target.files?.[0] || null; setAiFile(f); setAiError(""); analyzeFeasibility(f); e.target.value = ""; }}
+                    />
+                  </Button>
+
+                  {aiFile && (
+                    <IconButton
+                      size="small"
+                      color="error"
+                      aria-label="Remove selected file"
+                      onClick={() => {
+                        setAiFile(null);
+                        setAiFileFeasibility(null);
+                        setAiError("");
+                      }}
+                      disabled={aiGenerating}
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
+                  )}
+                </Box>
               </Box>
 
               <FormControl fullWidth>

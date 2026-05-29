@@ -30,6 +30,7 @@ class CreateQuestionRequest(BaseModel):
     irt_c: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     irt_thresholds: Optional[List[float]] = None # GRM thresholds for MULTI_MCQ
     image_url: Optional[str] = None
+    explanation: Optional[str] = None
 
 class BulkDeleteRequest(BaseModel):
     ids: List[int]
