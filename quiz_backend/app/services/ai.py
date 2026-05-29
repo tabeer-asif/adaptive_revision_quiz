@@ -8,6 +8,7 @@ import os
 import pathlib
 import hashlib
 import time
+import re
 from app.config import settings
 import asyncio
 import logging
@@ -62,7 +63,7 @@ IMPORTANT:
 - Vary which parts of the document you draw from
 - Match the difficulty level strictly
 - Write question text as standalone, self contained questions - do NOT use phrases like "according to the document", "based on the material", "from the study material", "in the text", "as mentioned", or any reference to a document/material/resource. The student will not have access to the source material during the quiz.
-- For any mathematical expressions, formulas, symbols or units use LaTeX delimiters: $...$ for inline math, $$...$$ for display/block equations
+- For any mathematical expressions, formulas, symbols or units use LaTeX delimiters: \\(...\\) for inline math, \\[...\\] for display/block equations
 
 Return ONLY a valid JSON array, no markdown, no explanation:
 [
@@ -107,7 +108,7 @@ TYPE_RULES = {
 - tolerance: suggest appropriate tolerance as float e.g. 0.1
 - options: null
 - keywords: null
-- Use LaTeX ($...$) for any formulas, symbols, or units in the question text e.g. $F = ma$, $9.81\\, \\text{m/s}^2$
+- Use LaTeX delimiters \\(...\\) for any formulas, symbols, or units in the question text e.g. \\(F = ma\\), \\(9.81\\, \\text{m/s}^2\\)
 """,
     "OPEN": """
 - answer is a model answer paragraph (2-4 sentences)
@@ -154,6 +155,29 @@ Return ONLY a valid JSON object, no markdown, no explanation:
 {{"MCQ": 0.0, "NUMERIC": 0.0, "SHORT": 0.0, "MULTI_MCQ": 0.0, "OPEN": 0.0}}
 
 Each value must be a float between 0.0 and 1.0.
+"""
+
+
+TOPIC_SUGGESTION_PROMPT = """
+Given generated quiz question texts and a list of existing topics, choose up to {limit} best-matching topics.
+
+Return ONLY valid JSON as an array with this shape:
+[
+    {{"topic_id": 12, "confidence": 0.82}},
+    {{"topic_id": 4, "confidence": 0.63}}
+]
+
+Rules:
+- Use ONLY topic IDs from the provided list.
+- Confidence must be float between 0.0 and 1.0.
+- Sort by confidence descending.
+- If nothing matches well, return []
+
+Topics:
+{topics_json}
+
+Generated question texts:
+{questions_json}
 """
 
 
@@ -497,6 +521,204 @@ async def score_document_feasibility(
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+
+async def suggest_topics_from_questions(
+    question_texts: list[str],
+    topics: list[dict],
+    limit: int = 3,
+) -> list[dict]:
+    """
+    Suggest matching existing topics for generated questions.
+    Returns [{topic_id, topic_name, confidence, source}, ...].
+    """
+    if not question_texts or not topics:
+        return []
+
+    topic_map = {
+        int(t["id"]): str(t.get("name") or "")
+        for t in topics
+        if isinstance(t, dict) and t.get("id") is not None
+    }
+    if not topic_map:
+        return []
+
+    prompt = TOPIC_SUGGESTION_PROMPT.format(
+        limit=max(1, min(5, int(limit or 3))),
+        topics_json=json.dumps(
+            [{"id": tid, "name": name} for tid, name in topic_map.items()],
+            ensure_ascii=True,
+        ),
+        questions_json=json.dumps(question_texts[:20], ensure_ascii=True),
+    )
+
+    try:
+        response = await run_with_retries(
+            lambda: client.models.generate_content(
+                model=MODEL,
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                ),
+            ),
+            "topic_suggest_generate",
+        )
+
+        raw = str(getattr(response, "text", "") or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return []
+
+        output = []
+        seen = set()
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            try:
+                topic_id = int(item.get("topic_id"))
+            except (TypeError, ValueError):
+                continue
+            if topic_id not in topic_map or topic_id in seen:
+                continue
+            seen.add(topic_id)
+
+            try:
+                confidence = float(item.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            confidence = max(0.0, min(1.0, confidence))
+
+            output.append(
+                {
+                    "topic_id": topic_id,
+                    "topic_name": topic_map[topic_id],
+                    "confidence": round(confidence, 3),
+                    "source": "ai",
+                }
+            )
+
+        output.sort(key=lambda x: x["confidence"], reverse=True)
+        return output[: max(1, min(5, int(limit or 3)))]
+
+    except Exception:
+        # Safe fallback: lexical overlap on topic-name tokens against question text.
+        joined = " ".join(question_texts).lower()
+        q_tokens = {t for t in re.findall(r"[a-z0-9]+", joined) if len(t) >= 3}
+        scored = []
+        for topic_id, name in topic_map.items():
+            t_tokens = {t for t in re.findall(r"[a-z0-9]+", name.lower()) if len(t) >= 3}
+            if not t_tokens:
+                continue
+            overlap = len(q_tokens & t_tokens)
+            score = overlap / len(t_tokens)
+            if score > 0:
+                scored.append((score, topic_id, name))
+
+        scored.sort(reverse=True)
+        return [
+            {
+                "topic_id": topic_id,
+                "topic_name": name,
+                "confidence": round(float(score), 3),
+                "source": "lexical",
+            }
+            for score, topic_id, name in scored[: max(1, min(5, int(limit or 3)))]
+        ]
+
+
+NEW_TOPIC_SUGGESTION_PROMPT = """You are helping a student organise their quiz questions into topics.
+
+Given these quiz question texts, suggest up to {limit} short, descriptive topic names that would work well as category labels.
+
+Rules:
+- Each name must be 1-4 words, title-case (e.g. "Cell Biology", "Quantum Mechanics", "The French Revolution")
+- Do NOT suggest names identical or very similar to these existing topics: {existing_json}
+- Prefer specific names over generic ones ("Photosynthesis" is better than "Biology")
+- If questions span multiple distinct subjects, suggest one name per subject
+- Return ONLY a valid JSON array of strings, no explanation, no markdown
+
+Question texts:
+{questions_json}
+"""
+
+
+async def suggest_new_topic_names(
+    question_texts: list[str],
+    existing_names: list[str],
+    limit: int = 4,
+) -> list[str]:
+    """
+    Ask the AI to propose brand-new topic name strings derived from the question content.
+    Returns a list of plain-string topic names (no IDs).
+    Falls back to an empty list on any error so the generate endpoint always succeeds.
+    """
+    if not question_texts:
+        return []
+
+    safe_limit = max(1, min(6, int(limit or 4)))
+    existing_lower = {n.lower().strip() for n in existing_names if n}
+
+    prompt = NEW_TOPIC_SUGGESTION_PROMPT.format(
+        limit=safe_limit,
+        existing_json=json.dumps(existing_names or [], ensure_ascii=True),
+        questions_json=json.dumps(question_texts[:20], ensure_ascii=True),
+    )
+
+    try:
+        response = await run_with_retries(
+            lambda: client.models.generate_content(
+                model=MODEL,
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.3,
+                ),
+            ),
+            "new_topic_name_suggest",
+        )
+
+        raw = str(getattr(response, "text", "") or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return []
+
+        output: list[str] = []
+        seen: set[str] = set()
+        for item in parsed:
+            if isinstance(item, str):
+                name = item.strip()
+            elif isinstance(item, dict):
+                name = str(item.get("name", "")).strip()
+            else:
+                continue
+
+            if not name:
+                continue
+            lower = name.lower()
+            if lower in existing_lower or lower in seen:
+                continue
+            seen.add(lower)
+            output.append(name)
+            if len(output) >= safe_limit:
+                break
+
+        return output
+
+    except Exception:
+        return []
 
 
 # ------- Post answer explanation -------

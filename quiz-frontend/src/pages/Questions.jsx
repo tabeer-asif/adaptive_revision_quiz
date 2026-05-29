@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import MathText from "../components/MathText";
 import {
   Box,
@@ -53,6 +53,50 @@ const TYPE_BLOOM_MAP = {
   OPEN: "Evaluate/Create - justify, critique, synthesize",
 };
 const FILTER_CONTROL_HEIGHT = 56; // px — keeps all filter-row controls the same height
+
+const findLatexDelimiterIssues = (value) => {
+  if (typeof value !== "string" || !value.trim()) return [];
+
+  const issues = [];
+  const tokenRegex = /\\\(|\\\)|\\\[|\\\]/g;
+  let inlineDepth = 0;
+  let blockDepth = 0;
+
+  for (const token of value.match(tokenRegex) || []) {
+    if (token === "\\(") {
+      inlineDepth += 1;
+      continue;
+    }
+    if (token === "\\)") {
+      if (inlineDepth === 0) {
+        issues.push("Found \\) without matching \\(.");
+      } else {
+        inlineDepth -= 1;
+      }
+      continue;
+    }
+    if (token === "\\[") {
+      blockDepth += 1;
+      continue;
+    }
+    if (token === "\\]") {
+      if (blockDepth === 0) {
+        issues.push("Found \\] without matching \\[.");
+      } else {
+        blockDepth -= 1;
+      }
+    }
+  }
+
+  if (inlineDepth > 0) issues.push("Unclosed inline math delimiter: \\( ... \\)");
+  if (blockDepth > 0) issues.push("Unclosed block math delimiter: \\[ ... \\]");
+
+  if (value.includes("$")) {
+    issues.push("Dollar delimiters are legacy. Use \\( ... \\) or \\[ ... \\].");
+  }
+
+  return [...new Set(issues)];
+};
 
 const allocateTypeCounts = (selectedTypes, count, difficulty) => {
   const ordered = QUESTION_TYPES.filter((t) => selectedTypes.includes(t));
@@ -185,6 +229,12 @@ function Questions() {
   const [aiStep, setAiStep] = useState(1);             // 1 = upload form, 2 = review
   const [aiFile, setAiFile] = useState(null);
   const [aiTopicId, setAiTopicId] = useState("");
+  const [aiDefaultTopicId, setAiDefaultTopicId] = useState("");
+  const [aiSuggestedTopics, setAiSuggestedTopics] = useState([]);
+  const [aiSuggestedNewTopicNames, setAiSuggestedNewTopicNames] = useState([]);
+  const [aiReviewTopicName, setAiReviewTopicName] = useState("");
+  const [aiReviewTopicError, setAiReviewTopicError] = useState("");
+  const [aiCreatingReviewTopic, setAiCreatingReviewTopic] = useState(false);
   const [aiSelectedTypes, setAiSelectedTypes] = useState(new Set());
   // Difficulty distribution: {1: 0, 2: 2, 3: 5, 4: 3, 5: 0}
   const [aiDifficultyDistribution, setAiDifficultyDistribution] = useState({ 1: 0, 2: 0, 3: 5, 4: 0, 5: 0 });
@@ -198,6 +248,28 @@ function Questions() {
   const [aiFeasibilityLoading, setAiFeasibilityLoading] = useState(false);
   const [aiEditingKey, setAiEditingKey] = useState(null); // _key of question being edited inline
   const [aiProgress, setAiProgress] = useState({ stage: "", percent: 0 });
+
+  const latexIssues = useMemo(() => {
+    const optionIssues = questionForm.options.map((option) =>
+      findLatexDelimiterIssues(option?.value || "")
+    );
+    const textIssues = findLatexDelimiterIssues(questionForm.text);
+    const answerIssues = ["SHORT", "OPEN"].includes(questionForm.type)
+      ? findLatexDelimiterIssues(questionForm.answer)
+      : [];
+
+    const hasAnyIssues =
+      textIssues.length > 0 ||
+      answerIssues.length > 0 ||
+      optionIssues.some((arr) => arr.length > 0);
+
+    return {
+      textIssues,
+      optionIssues,
+      answerIssues,
+      hasAnyIssues,
+    };
+  }, [questionForm]);
 
   const orderedSelectedTypes = QUESTION_TYPES.filter((type) => aiSelectedTypes.has(type));
   const plannedTypeSplitByDifficulty = [1, 2, 3, 4, 5]
@@ -644,6 +716,10 @@ function Questions() {
         throw new Error("Difficulty must be an integer.");
       }
 
+      if (latexIssues.hasAnyIssues) {
+        throw new Error("Fix LaTeX delimiter issues before saving.");
+      }
+
       const isEditing = editingQuestionId !== null;
       const url = isEditing
         ? `${API_URL}/questions/${editingQuestionId}`
@@ -829,6 +905,12 @@ function Questions() {
     setAiStep(1);
     setAiFile(null);
     setAiTopicId("");
+    setAiDefaultTopicId("");
+    setAiSuggestedTopics([]);
+    setAiSuggestedNewTopicNames([]);
+    setAiReviewTopicName("");
+    setAiReviewTopicError("");
+    setAiCreatingReviewTopic(false);
     setAiSelectedTypes(new Set());
     setAiDifficultyDistribution({ 1: 0, 2: 0, 3: 5, 4: 0, 5: 0 });
     setAiError("");
@@ -879,9 +961,57 @@ function Questions() {
     );
   };
 
+  const applyDefaultTopicToUnassigned = () => {
+    if (!aiDefaultTopicId) return;
+    const defaultId = Number(aiDefaultTopicId);
+    setAiGeneratedQuestions((prev) =>
+      prev.map((q) => (q.topic_id ? q : { ...q, topic_id: defaultId }))
+    );
+  };
+
+  const handleCreateTopicInAiReview = async (nameOverride = null) => {
+    const name = (nameOverride !== null ? nameOverride : aiReviewTopicName).trim();
+    if (!name) {
+      setAiReviewTopicError("Topic name cannot be empty");
+      return;
+    }
+
+    setAiCreatingReviewTopic(true);
+    setAiReviewTopicError("");
+    try {
+      const res = await fetch(`${API_URL}/topics`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to create topic");
+
+      const topicData = await fetchTopics();
+      setTopics(topicData);
+
+      const newTopicId = String(data.id);
+      setAiDefaultTopicId(newTopicId);
+      setAiTopicId(newTopicId);
+      setAiSuggestedTopics((prev) => {
+        const withoutDup = prev.filter((t) => String(t.topic_id) !== newTopicId);
+        return [{ topic_id: data.id, topic_name: data.name, confidence: 1, source: "created" }, ...withoutDup];
+      });
+      setAiSuggestedNewTopicNames((prev) => prev.filter((n) => n.toLowerCase() !== name.toLowerCase()));
+      setAiReviewTopicName("");
+    } catch (err) {
+      setAiReviewTopicError(err.message || "Failed to create topic");
+    } finally {
+      setAiCreatingReviewTopic(false);
+    }
+  };
+
   const handleAiGenerate = async () => {
-    if (!aiFile || !aiTopicId || aiSelectedTypes.size === 0) {
-      setAiError("Please select a file, topic, and question type.");
+    if (!aiFile || aiSelectedTypes.size === 0) {
+      setAiError("Please select a file and at least one question type.");
       return;
     }
 
@@ -903,7 +1033,9 @@ function Questions() {
       for (const [difficulty, count] of activeDifficulties) {
           const formData = new FormData();
           formData.append("file", aiFile);
-          formData.append("topic_id", aiTopicId);
+          if (aiTopicId) {
+            formData.append("topic_id", aiTopicId);
+          }
           formData.append(
             "question_types",
             QUESTION_TYPES.filter((type) => aiSelectedTypes.has(type)).join(",")
@@ -931,9 +1063,11 @@ function Questions() {
                   generated: (data.generated || []).map((q, idx) => ({
                     ...q,
                     _key: counterAtThisRequest + idx,
-                    topic_id: Number(aiTopicId),
+                    topic_id: q.topic_id ?? null,
                   })),
                   warnings: data.validation_warnings || [],
+                  suggestedTopics: data.suggested_topics || [],
+                  suggestedNewTopicNames: data.suggested_new_topic_names || [],
                 };
               } finally {
                 setAiProgress((prev) => {
@@ -961,13 +1095,56 @@ function Questions() {
       // Merge all results
       const mergedQuestions = results.flatMap((r) => r.generated);
       const mergedWarnings = results.flatMap((r) => r.warnings);
+      const mergedSuggestions = results
+        .flatMap((r) => r.suggestedTopics || [])
+        .filter((s) => s && s.topic_id != null)
+        .reduce((acc, item) => {
+          const key = String(item.topic_id);
+          const existing = acc.get(key);
+          if (!existing || (item.confidence || 0) > (existing.confidence || 0)) {
+            acc.set(key, item);
+          }
+          return acc;
+        }, new Map());
 
-      if (mergedQuestions.length === 0) {
+      const rankedSuggestions = [...mergedSuggestions.values()]
+        .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+        .slice(0, 3);
+
+      const seenNewNames = new Set();
+      const mergedNewTopicNames = results
+        .flatMap((r) => r.suggestedNewTopicNames || [])
+        .filter((n) => {
+          if (typeof n !== "string" || !n.trim()) return false;
+          const lower = n.trim().toLowerCase();
+          if (seenNewNames.has(lower)) return false;
+          seenNewNames.add(lower);
+          return true;
+        })
+        .map((n) => n.trim())
+        .slice(0, 5);
+
+      const preferredTopic = String(
+        aiDefaultTopicId
+        ?? aiTopicId
+        ?? rankedSuggestions[0]?.topic_id
+        ?? ""
+      );
+
+      const withTopicDefaults = mergedQuestions.map((q) => ({
+        ...q,
+        topic_id: q.topic_id ?? (preferredTopic ? Number(preferredTopic) : null),
+      }));
+
+      if (withTopicDefaults.length === 0) {
         throw new Error("No questions were generated. Please try again.");
       }
 
-      setAiGeneratedQuestions(mergedQuestions);
+      setAiGeneratedQuestions(withTopicDefaults);
       setAiWarnings(mergedWarnings);
+      setAiSuggestedTopics(rankedSuggestions);
+      setAiSuggestedNewTopicNames(mergedNewTopicNames);
+      setAiDefaultTopicId(preferredTopic);
       setAiStep(2);
       setAiProgress({ stage: "Done", percent: 100 });
     } catch (err) {
@@ -986,8 +1163,14 @@ function Questions() {
     setAiSaving(true);
     setAiSaveError("");
     try {
+      const unassigned = aiGeneratedQuestions.filter((q) => q.topic_id == null || q.topic_id === "");
+      if (unassigned.length > 0) {
+        throw new Error("Assign a topic to every generated question before saving.");
+      }
+
       for (const q of aiGeneratedQuestions) {
         const { _key, ...payload } = q;
+        payload.topic_id = Number(payload.topic_id);
         const res = await fetch(`${API_URL}/questions/create`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -998,6 +1181,7 @@ function Questions() {
           throw new Error(d.detail || "Failed to save question");
         }
       }
+
       await refreshQuestions();
       setAiDialogOpen(false);
       resetAiDialog();
@@ -1382,7 +1566,20 @@ function Questions() {
               minRows={3}
               value={questionForm.text}
               onChange={(e) => updateQuestionForm("text", e.target.value)}
+              error={latexIssues.textIssues.length > 0}
+              helperText={latexIssues.textIssues[0] || "Use \\( ... \\) for inline and \\[ ... \\] for block math."}
             />
+
+            {questionForm.text?.trim() && (
+              <Box sx={{ p: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 1, bgcolor: "background.paper" }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+                  Preview
+                </Typography>
+                <Typography variant="body2" component="div">
+                  <MathText text={questionForm.text} />
+                </Typography>
+              </Box>
+            )}
 
             {questionForm.type ? (
               <>
@@ -1403,6 +1600,8 @@ function Questions() {
                           value={option.value}
                           onChange={(e) => handleOptionChange(index, "value", e.target.value)}
                           fullWidth
+                          error={latexIssues.optionIssues[index]?.length > 0}
+                          helperText={latexIssues.optionIssues[index]?.[0] || " "}
                         />
                         <Button
                           variant="text"
@@ -1417,6 +1616,19 @@ function Questions() {
                     <Button variant="outlined" onClick={addOption}>
                       Add Option
                     </Button>
+
+                    {questionForm.options.some((option) => option.value?.trim()) && (
+                      <Box sx={{ p: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 1, bgcolor: "background.paper" }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+                          Options Preview
+                        </Typography>
+                        {questionForm.options.map((option) => (
+                          <Typography key={`preview-${option.key}`} variant="body2" component="div" sx={{ mb: 0.25 }}>
+                            <strong>{option.key || "?"}:</strong> <MathText text={option.value} />
+                          </Typography>
+                        ))}
+                      </Box>
+                    )}
                   </>
                 ) : null}
 
@@ -1466,8 +1678,25 @@ function Questions() {
                     minRows={questionForm.type === "NUMERIC" ? undefined : 2}
                     value={questionForm.answer}
                     onChange={(e) => updateQuestionForm("answer", e.target.value)}
+                    error={["SHORT", "OPEN"].includes(questionForm.type) && latexIssues.answerIssues.length > 0}
+                    helperText={
+                      ["SHORT", "OPEN"].includes(questionForm.type)
+                        ? (latexIssues.answerIssues[0] || "Use \\( ... \\) for inline and \\[ ... \\] for block math.")
+                        : undefined
+                    }
                   />
                 ) : null}
+
+                {["SHORT", "OPEN"].includes(questionForm.type) && questionForm.answer?.trim() && (
+                  <Box sx={{ p: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 1, bgcolor: "background.paper" }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+                      Answer Preview
+                    </Typography>
+                    <Typography variant="body2" component="div">
+                      <MathText text={questionForm.answer} />
+                    </Typography>
+                  </Box>
+                )}
 
                 <TextField
                   label="Difficulty"
@@ -1610,7 +1839,14 @@ function Questions() {
                       type="file"
                       accept=".pdf,.txt,.jpeg,.jpg,.png,.webp"
                       hidden
-                      onChange={(e) => { const f = e.target.files?.[0] || null; setAiFile(f); setAiError(""); analyzeFeasibility(f); e.target.value = ""; }}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] || null;
+                        setAiFile(f);
+                        setAiError("");
+                        setAiSuggestedTopics([]);
+                        analyzeFeasibility(f);
+                        e.target.value = "";
+                      }}
                     />
                   </Button>
 
@@ -1623,6 +1859,9 @@ function Questions() {
                         setAiFile(null);
                         setAiFileFeasibility(null);
                         setAiError("");
+                        setAiTopicId("");
+                        setAiDefaultTopicId("");
+                        setAiSuggestedTopics([]);
                       }}
                       disabled={aiGenerating}
                     >
@@ -1633,16 +1872,22 @@ function Questions() {
               </Box>
 
               <FormControl fullWidth>
-                <InputLabel>Topic</InputLabel>
+                <InputLabel>Topic (optional)</InputLabel>
                 <Select
                   value={aiTopicId}
-                  label="Topic"
+                  label="Topic (optional)"
                   onChange={(e) => setAiTopicId(e.target.value)}
                 >
+                  <MenuItem value="">
+                    Decide during review
+                  </MenuItem>
                   {topics.map((t) => (
                     <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
                   ))}
                 </Select>
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                  Leave blank if the document spans multiple topics; you can assign per question in review.
+                </Typography>
               </FormControl>
 
               <FormControl fullWidth>
@@ -1800,6 +2045,97 @@ function Questions() {
           {/* ── Step 2: Review ── */}
           {aiStep === 2 && (
             <Stack spacing={2} sx={{ pt: 1 }}>
+              <Paper variant="outlined" sx={{ p: 2 }}>
+                <Stack spacing={1.5}>
+                  <Typography variant="subtitle2">Topic Assignment</Typography>
+
+                  {aiSuggestedTopics.length > 0 && (
+                    <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap" }}>
+                      {aiSuggestedTopics.map((s) => (
+                        <Chip
+                          key={`ai-topic-${s.topic_id}`}
+                          label={`${s.topic_name} (${Math.round((s.confidence || 0) * 100)}%)`}
+                          color={String(s.topic_id) === String(aiDefaultTopicId) ? "primary" : "default"}
+                          variant={String(s.topic_id) === String(aiDefaultTopicId) ? "filled" : "outlined"}
+                          onClick={() => setAiDefaultTopicId(String(s.topic_id))}
+                        />
+                      ))}
+                    </Box>
+                  )}
+
+                  {aiSuggestedNewTopicNames.length > 0 && (
+                    <Box>
+                      <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: "block" }}>
+                        Create suggested topic:
+                      </Typography>
+                      <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap" }}>
+                        {aiSuggestedNewTopicNames.map((name) => (
+                          <Chip
+                            key={`new-topic-${name}`}
+                            label={`+ ${name}`}
+                            variant="outlined"
+                            color="secondary"
+                            size="small"
+                            onClick={() => handleCreateTopicInAiReview(name)}
+                            disabled={aiCreatingReviewTopic}
+                          />
+                        ))}
+                      </Box>
+                    </Box>
+                  )}
+
+                  <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
+                    <FormControl sx={{ minWidth: 260 }} size="small">
+                      <InputLabel>Default Topic</InputLabel>
+                      <Select
+                        value={aiDefaultTopicId}
+                        label="Default Topic"
+                        onChange={(e) => setAiDefaultTopicId(e.target.value)}
+                      >
+                        <MenuItem value="">None</MenuItem>
+                        {topics.map((t) => (
+                          <MenuItem key={`default-topic-${t.id}`} value={String(t.id)}>{t.name}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={applyDefaultTopicToUnassigned}
+                      disabled={!aiDefaultTopicId}
+                    >
+                      Apply to unassigned
+                    </Button>
+                  </Box>
+
+                  <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
+                    <TextField
+                      label="Create new topic"
+                      size="small"
+                      value={aiReviewTopicName}
+                      onChange={(e) => { setAiReviewTopicName(e.target.value); setAiReviewTopicError(""); }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleCreateTopicInAiReview();
+                        }
+                      }}
+                      error={Boolean(aiReviewTopicError)}
+                      helperText={aiReviewTopicError || " "}
+                    />
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={handleCreateTopicInAiReview}
+                      disabled={aiCreatingReviewTopic || !aiReviewTopicName.trim()}
+                    >
+                      {aiCreatingReviewTopic ? "Adding..." : "Add"}
+                    </Button>
+                  </Box>
+
+                </Stack>
+              </Paper>
+
               {aiWarnings.length > 0 && (
                 <Alert severity="warning">
                   <Typography variant="body2" fontWeight="bold" sx={{ mb: 0.5 }}>
@@ -1830,6 +2166,27 @@ function Questions() {
                           <Chip label={q.type} size="small" color="primary" variant="outlined" />
                           <Chip label={`Difficulty: ${q.difficulty}`} size="small" variant="outlined" />
                         </Box>
+
+                        <FormControl size="small" sx={{ minWidth: 220, mb: 1.25 }}>
+                          <InputLabel>Topic</InputLabel>
+                          <Select
+                            value={q.topic_id != null ? String(q.topic_id) : ""}
+                            label="Topic"
+                            onChange={(e) => {
+                              const next = e.target.value;
+                              updateAiQuestion(q._key, {
+                                topic_id: next === "" ? null : Number(next),
+                              });
+                            }}
+                          >
+                            <MenuItem value="">Unassigned</MenuItem>
+                            {topics.map((topic) => (
+                              <MenuItem key={`q-topic-${q._key}-${topic.id}`} value={String(topic.id)}>
+                                {topic.name}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
 
                         {isEditing ? (
                           <Stack spacing={1.5} sx={{ mt: 1 }}>
@@ -2024,7 +2381,7 @@ function Questions() {
               <Button
                 variant="contained"
                 onClick={handleAiGenerate}
-                disabled={aiGenerating || !aiFile || !aiTopicId || aiSelectedTypes.size === 0 || Object.values(aiDifficultyDistribution).reduce((a, b) => a + b, 0) === 0}
+                disabled={aiGenerating || !aiFile || aiSelectedTypes.size === 0 || Object.values(aiDifficultyDistribution).reduce((a, b) => a + b, 0) === 0}
               >
                 {aiGenerating ? "Generating…" : "Generate Questions"}
               </Button>

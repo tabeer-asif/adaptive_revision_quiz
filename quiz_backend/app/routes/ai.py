@@ -4,6 +4,7 @@ from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from app.dependencies.auth import get_current_user
 from app.supabase_client import supabase_db
 from app.config import settings
+from app.utils.math_text import normalize_question_math_fields
 import pathlib
 import logging
 import re
@@ -54,6 +55,80 @@ def _get_ai_service_components():
         )
     except ImportError as exc:
         raise HTTPException(503, f"AI dependency error: {exc}")
+
+
+def _lexical_topic_suggestions(questions: list[dict], topics: list[dict], limit: int = 3) -> list[dict]:
+    if not topics:
+        return []
+
+    question_text = " ".join(str(q.get("text") or "") for q in questions).lower()
+    tokens = {t for t in re.findall(r"[a-z0-9]+", question_text) if len(t) >= 3}
+    if not tokens:
+        return []
+
+    scored = []
+    for topic in topics:
+        name = str(topic.get("name") or "").strip()
+        if not name:
+            continue
+        name_tokens = {t for t in re.findall(r"[a-z0-9]+", name.lower()) if len(t) >= 3}
+        if not name_tokens:
+            continue
+        overlap = len(tokens & name_tokens)
+        score = overlap / len(name_tokens)
+        if score > 0:
+            scored.append((score, topic))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    output = []
+    for score, topic in scored[:limit]:
+        output.append(
+            {
+                "topic_id": topic.get("id"),
+                "topic_name": topic.get("name"),
+                "confidence": round(float(score), 3),
+                "source": "lexical",
+            }
+        )
+    return output
+
+
+async def _suggest_new_topic_names_for_questions(questions: list[dict], existing_topics: list[dict]) -> list[str]:
+    """Return AI-proposed brand-new topic name strings (not matching any existing topic)."""
+    if not questions:
+        return []
+    try:
+        from app.services.ai import suggest_new_topic_names
+        existing_names = [t.get("name", "") for t in existing_topics if t.get("name")]
+        return await suggest_new_topic_names(
+            question_texts=[str(q.get("text") or "") for q in questions],
+            existing_names=existing_names,
+            limit=4,
+        )
+    except Exception:
+        return []
+
+
+async def _suggest_topics_from_generated_questions(questions: list[dict], topics: list[dict]) -> list[dict]:
+    if not questions or not topics:
+        return []
+
+    try:
+        from app.services.ai import suggest_topics_from_questions
+
+        topic_candidates = [{"id": t.get("id"), "name": t.get("name")} for t in topics if t.get("id") is not None]
+        ai_suggestions = await suggest_topics_from_questions(
+            question_texts=[str(q.get("text") or "") for q in questions],
+            topics=topic_candidates,
+            limit=3,
+        )
+
+        if ai_suggestions:
+            return ai_suggestions
+    except Exception:
+        pass
+
+    return _lexical_topic_suggestions(questions, topics, limit=3)
 
 
 def normalise_generated_questions(questions, question_type: str, difficulty: int, expected_count: int):
@@ -197,15 +272,23 @@ def normalise_generated_questions(questions, question_type: str, difficulty: int
             warnings.append(f"Question {idx}: explanation was converted to text")
             explanation = str(explanation)
 
+        normalized_text, normalized_options, normalized_answer, normalized_explanation = normalize_question_math_fields(
+            question_type,
+            text.strip(),
+            options,
+            answer,
+            explanation.strip() if isinstance(explanation, str) else "",
+        )
+
         normalised.append({
-            "text": text.strip(),
+            "text": normalized_text,
             "type": question_type,
-            "options": options,
-            "answer": answer,
+            "options": normalized_options,
+            "answer": normalized_answer,
             "keywords": keywords,
             "tolerance": tolerance,
             "difficulty": difficulty,
-            "explanation": explanation.strip() if isinstance(explanation, str) else "",
+            "explanation": normalized_explanation if isinstance(normalized_explanation, str) else "",
         })
 
     return normalised, warnings
@@ -326,7 +409,7 @@ async def score_feasibility(
 @router.post("/generate-questions")
 async def generate_questions(
     file: UploadFile = File(...),
-    topic_id: int = Form(...),
+    topic_id: int | None = Form(None),
     question_type: str = Form(None),
     question_types: str = Form(None),
     difficulty: int = Form(...),
@@ -396,19 +479,22 @@ async def generate_questions(
     if not file_bytes:
         raise HTTPException(400, "Uploaded file is empty.")
 
-    #  Validate topic exists
-    topic_res = (
-        supabase_db.table("topics")
-        .select("id, name")
-        .eq("id", topic_id)
-        .single()
-        .execute()
-    )
+    # Optional topic for generation. If omitted, use a neutral context and let user assign in review.
+    if topic_id is not None:
+        topic_res = (
+            supabase_db.table("topics")
+            .select("id, name")
+            .eq("id", topic_id)
+            .single()
+            .execute()
+        )
 
-    if not topic_res.data:
-        raise HTTPException(404, "Topic not found.")
+        if not topic_res.data:
+            raise HTTPException(404, "Topic not found.")
 
-    topic_name = topic_res.data["name"]
+        topic_name = topic_res.data["name"]
+    else:
+        topic_name = "General"
     mime_type = expected_mime
 
     #  Generate questions for each selected type (single upload, concurrent slices)
@@ -480,6 +566,24 @@ async def generate_questions(
             f"{dropped_duplicates} near-duplicate question(s) were removed to improve variety."
         )
 
+    topics_resp = supabase_db.table("topics").select("id, name").execute()
+    available_topics = topics_resp.data or []
+    suggested_topics = await _suggest_topics_from_generated_questions(all_questions, available_topics)
+    suggested_new_topic_names = await _suggest_new_topic_names_for_questions(all_questions, available_topics)
+
+    if topic_id is not None:
+        chosen = next((t for t in available_topics if t.get("id") == topic_id), None)
+        if chosen:
+            chosen_suggestion = {
+                "topic_id": chosen.get("id"),
+                "topic_name": chosen.get("name"),
+                "confidence": 1.0,
+                "source": "selected",
+            }
+            suggested_topics = [chosen_suggestion] + [
+                s for s in suggested_topics if s.get("topic_id") != topic_id
+            ]
+
     logger.info(
         "ai_generate_questions_success user_id=%s topic_id=%s types=%s type_counts=%s generated_count=%s",
         str(user.id),
@@ -496,6 +600,8 @@ async def generate_questions(
         "count": len(all_questions),
         "validation_warnings": all_warnings,
         "topic_id": topic_id,
+        "suggested_topics": suggested_topics,
+        "suggested_new_topic_names": suggested_new_topic_names,
         "question_types": selected_types,
         "type_counts": type_counts,
         "message": "Review and edit questions before saving. "

@@ -252,3 +252,67 @@ def test_generate_questions_returns_warnings_for_soft_fixes(monkeypatch):
     assert out["count"] == 1
     assert out["generated"][0]["answer"] == "B"
     assert len(out["validation_warnings"]) >= 1
+
+
+def test_generate_questions_allows_missing_topic_and_returns_suggestions(monkeypatch):
+    file = DummyUploadFile("notes.pdf", "application/pdf", b"pdf-content")
+    monkeypatch.setattr(ai_routes.settings, "AI_ENABLED", True)
+    monkeypatch.setattr(ai_routes.settings, "GEMINI_API_KEY", "key")
+
+    db = StubSupabaseDB({
+        ("topics", "select"): [{"data": [{"id": 10, "name": "Cell Biology"}, {"id": 12, "name": "History"}]}],
+    })
+    monkeypatch.setattr(ai_routes, "supabase_db", db)
+
+    async def fake_generate_all_questions(**kwargs):
+        assert kwargs["topic_name"] == "General"
+        return [[{
+            "text": "Which cell organelle produces ATP?",
+            "type": "MCQ",
+            "options": {"A": "Nucleus", "B": "Mitochondria", "C": "Ribosome", "D": "Membrane"},
+            "answer": "B",
+            "keywords": None,
+            "tolerance": None,
+            "difficulty": 3,
+            "explanation": "Mitochondria produce ATP.",
+        }]]
+
+    monkeypatch.setattr(
+        ai_routes,
+        "_get_ai_service_components",
+        lambda: (None, fake_generate_all_questions, None, {".pdf": "application/pdf"}, 20 * 1024 * 1024),
+    )
+
+    out = asyncio.run(
+        ai_routes.generate_questions(
+            file=file,
+            topic_id=None,
+            question_types="MCQ",
+            difficulty=3,
+            count=1,
+            user=FakeUser("u1"),
+        )
+    )
+
+    assert out["count"] == 1
+    assert out["topic_id"] is None
+    assert isinstance(out["suggested_topics"], list)
+
+
+def test_score_feasibility_returns_scores(monkeypatch):
+    file = DummyUploadFile("notes.pdf", "application/pdf", b"pdf-content")
+    monkeypatch.setattr(ai_routes.settings, "AI_ENABLED", True)
+    monkeypatch.setattr(ai_routes.settings, "GEMINI_API_KEY", "key")
+
+    async def fake_score_document_feasibility(file_bytes, filename, mime_type):
+        return {"MCQ": 0.8, "NUMERIC": 0.2, "SHORT": 0.7, "MULTI_MCQ": 0.4, "OPEN": 0.5}
+
+    monkeypatch.setattr(
+        ai_routes,
+        "_get_ai_service_components",
+        lambda: (None, None, fake_score_document_feasibility, {".pdf": "application/pdf"}, 20 * 1024 * 1024),
+    )
+
+    out = asyncio.run(ai_routes.score_feasibility(file=file, user=FakeUser("u1")))
+
+    assert "scores" in out

@@ -7,6 +7,7 @@ from app.schemas.quiz import TopicsRequest
 from app.services.irt import select_best_question_per_topic, default_grm_thresholds
 from app.schemas.questions import CreateQuestionRequest, BulkDeleteRequest
 from app.dependencies.question_validators import VALIDATORS
+from app.utils.math_text import normalize_question_math_fields
 import json
 
 IRT_DEFAULTS = {
@@ -82,13 +83,21 @@ def create_question(payload: CreateQuestionRequest, user=Depends(get_current_use
         irt_thresholds = None  # not applicable for other types
 
     # 3. Build DB object
+    normalized_text, normalized_options, normalized_answer, normalized_explanation = normalize_question_math_fields(
+        payload.type,
+        payload.text,
+        payload.options,
+        payload.answer,
+        payload.explanation,
+    )
+
     question_data = {
         "topic_id": payload.topic_id,
-        "text": payload.text,
+        "text": normalized_text,
         "type": payload.type,
-        "options": payload.options,
-        "answer": payload.answer,
-        "explanation": payload.explanation,
+        "options": normalized_options,
+        "answer": normalized_answer,
+        "explanation": normalized_explanation,
         "difficulty": payload.difficulty,
         "irt_a": payload.irt_a if payload.irt_a is not None else irt_defaults["irt_a"],
         "irt_b": payload.irt_b if payload.irt_b is not None else irt_defaults["irt_b"],
@@ -169,6 +178,18 @@ def update_question(question_id: int, payload: CreateQuestionRequest, user=Depen
         "keywords": payload.keywords,
         "image_url": payload.image_url or None,
     }
+
+    normalized_text, normalized_options, normalized_answer, normalized_explanation = normalize_question_math_fields(
+        payload.type,
+        question_data["text"],
+        question_data["options"],
+        question_data["answer"],
+        question_data["explanation"],
+    )
+    question_data["text"] = normalized_text
+    question_data["options"] = normalized_options
+    question_data["answer"] = normalized_answer
+    question_data["explanation"] = normalized_explanation
 
     # Reset calibration stats only if the answer itself changed — prior data is now invalid
     if answer_changed:
