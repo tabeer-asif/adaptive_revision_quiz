@@ -24,8 +24,14 @@ describe("Results page", () => {
   it("renders heading and default score when no state provided", () => {
     renderResults();
     expect(screen.getByText(/Results/i)).toBeInTheDocument();
-    expect(screen.getByText(/You scored 0 out of 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/You scored 0 out of 0/i)).toBeInTheDocument();
     expect(screen.getByText(/0% Accuracy/i)).toBeInTheDocument();
+  });
+
+  it("shows early-exit summary text when quiz is ended early", () => {
+    renderResults({ score: 0, total: 0, exitedEarly: true });
+    expect(screen.getByText(/Quiz ended early/i)).toBeInTheDocument();
+    expect(screen.getByText(/Start another quiz whenever you're ready/i)).toBeInTheDocument();
   });
 
   it("renders correct score and percentage", () => {

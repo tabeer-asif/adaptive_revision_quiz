@@ -87,7 +87,7 @@ function Home() {
         p: 2,
       }}
     >
-      <Card sx={{ width: 500, p: 3, borderRadius: 3 }}>
+      <Card sx={{ width: "100%", maxWidth: 560, p: { xs: 2, sm: 3 }, borderRadius: 3 }}>
         <CardContent>
           <Typography variant="h4" align="center" gutterBottom>
             Welcome 👋
@@ -126,7 +126,7 @@ function Home() {
           <Button
             variant="contained"
             fullWidth
-            sx={{ mb: 2, height: 45 }}
+            sx={{ mb: 2, height: 46 }}
             onClick={handleStartQuiz}
             disabled={selectedTopics.length === 0} // Require at least 1 topic
           >

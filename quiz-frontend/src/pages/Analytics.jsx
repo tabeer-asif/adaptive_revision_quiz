@@ -20,6 +20,7 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -33,8 +34,16 @@ import {
   getAnalyticsThetaProgression,
   getAnalyticsTopicSummary,
 } from "../services/api";
+import { alpha, useTheme } from "@mui/material/styles";
 
 const WINDOW_OPTIONS = [30, 90, 180, 365];
+
+function formatXAxisDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 function EmptyCard({ title, description }) {
   return (
@@ -50,6 +59,7 @@ function EmptyCard({ title, description }) {
 }
 
 function Analytics() {
+  const theme = useTheme();
   const navigate = useNavigate();
   const [windowDays, setWindowDays] = useState(90);
   const [thetaTopicFilter, setThetaTopicFilter] = useState(null);
@@ -81,6 +91,27 @@ function Analytics() {
   const activeThetaSeries = useMemo(() => {
     return thetaSeries.find((s) => String(s.topic_id) === String(thetaTopicFilter)) || null;
   }, [thetaSeries, thetaTopicFilter]);
+
+  const activeThetaPoints = useMemo(() => {
+    const points = activeThetaSeries?.points || [];
+    return points.map((point, index) => ({
+      ...point,
+      response_number: index + 1,
+    }));
+  }, [activeThetaSeries]);
+
+  const activePosteriorPoints = useMemo(() => {
+    return activeThetaPoints.filter((point) => typeof point.posterior_sd === "number");
+  }, [activeThetaPoints]);
+
+  const chartAxisColor = theme.palette.text.secondary;
+  const chartGridColor = alpha(theme.palette.text.primary, 0.14);
+  const chartTooltipStyle = {
+    backgroundColor: alpha(theme.palette.background.paper, 0.98),
+    border: `1px solid ${theme.palette.divider}`,
+    color: theme.palette.text.primary,
+    borderRadius: 8,
+  };
 
   const loadAnalytics = useCallback(async () => {
     setLoading(true);
@@ -115,7 +146,10 @@ function Analytics() {
       sx={{
         minHeight: "100vh",
         p: { xs: 2, md: 4 },
-        background: "linear-gradient(180deg, #f4f8fb 0%, #edf2f7 100%)",
+        background: `linear-gradient(180deg, ${alpha(theme.palette.primary.main, 0.07)} 0%, ${alpha(
+          theme.palette.background.default,
+          0.98
+        )} 32%, ${theme.palette.background.default} 100%)`,
       }}
     >
       <Box sx={{ maxWidth: 1200, mx: "auto" }}>
@@ -233,21 +267,81 @@ function Analytics() {
                   <Card sx={{ borderRadius: 3 }}>
                     <CardContent>
                       <Typography color="text.secondary" sx={{ mb: 2 }}>
-                        Theta Before / After Over Time
+                        Theta Before / After By Responses Answered
                       </Typography>
                       <Box sx={{ width: "100%", height: 300 }}>
                         <ResponsiveContainer>
                           <LineChart
-                            data={activeThetaSeries.points || []}
+                            data={activeThetaPoints}
                             margin={{ top: 8, right: 20, bottom: 16, left: 0 }}
                           >
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="created_at" hide />
-                            <YAxis />
-                            <Tooltip />
-                            <Legend />
-                            <Line type="monotone" dataKey="theta_before" stroke="#64748b" dot={false} name="Theta Before" />
-                            <Line type="monotone" dataKey="theta_after" stroke="#0f766e" dot={false} name="Theta After" />
+                            <CartesianGrid stroke={chartGridColor} strokeDasharray="3 3" />
+                            <XAxis
+                              dataKey="response_number"
+                              interval="preserveStartEnd"
+                              minTickGap={28}
+                              allowDecimals={false}
+                              tick={{ fill: chartAxisColor, fontSize: 12 }}
+                              label={{ value: "Responses Answered", position: "insideBottom", offset: -8 }}
+                            />
+                            <YAxis tick={{ fill: chartAxisColor, fontSize: 12 }} />
+                            <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: theme.palette.text.primary }} />
+                            <Legend wrapperStyle={{ color: theme.palette.text.primary }} />
+                            <Line type="monotone" dataKey="theta_before" stroke={theme.palette.secondary.light} dot={false} name="Theta Before" />
+                            <Line type="monotone" dataKey="theta_after" stroke={theme.palette.primary.main} dot={false} name="Theta After" />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </Box>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {!activeThetaSeries ? null : activePosteriorPoints.length === 0 ? (
+                  <Card sx={{ borderRadius: 3, mt: 2 }}>
+                    <CardContent>
+                      <Typography color="text.secondary">
+                        Posterior SD progression is not available yet for this topic.
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Card sx={{ borderRadius: 3, mt: 2 }}>
+                    <CardContent>
+                      <Typography color="text.secondary" sx={{ mb: 2 }}>
+                        Posterior SD Progression (Lower Is Better)
+                      </Typography>
+                      <Box sx={{ width: "100%", height: 280 }}>
+                        <ResponsiveContainer>
+                          <LineChart
+                            data={activePosteriorPoints}
+                            margin={{ top: 8, right: 20, bottom: 16, left: 0 }}
+                          >
+                            <CartesianGrid stroke={chartGridColor} strokeDasharray="3 3" />
+                            <XAxis
+                              dataKey="response_number"
+                              interval="preserveStartEnd"
+                              minTickGap={28}
+                              allowDecimals={false}
+                              tick={{ fill: chartAxisColor, fontSize: 12 }}
+                              label={{ value: "Responses Answered", position: "insideBottom", offset: -8 }}
+                            />
+                            <YAxis tick={{ fill: chartAxisColor, fontSize: 12 }} domain={[0, "auto"]} />
+                            <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: theme.palette.text.primary }} />
+                            <Legend wrapperStyle={{ color: theme.palette.text.primary }} />
+                            <ReferenceLine
+                              y={0.5}
+                              stroke={theme.palette.warning.main}
+                              strokeDasharray="6 4"
+                              ifOverflow="extendDomain"
+                              label={{ value: "Calibration Threshold (0.5)", position: "insideTopRight" }}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="posterior_sd"
+                              stroke={theme.palette.warning.light}
+                              dot={false}
+                              name="Posterior SD"
+                            />
                           </LineChart>
                         </ResponsiveContainer>
                       </Box>
@@ -269,11 +363,18 @@ function Analytics() {
                       <Box sx={{ width: "100%", height: 280 }}>
                         <ResponsiveContainer>
                           <BarChart data={dueTrend}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="date" hide />
-                            <YAxis />
-                            <Tooltip />
-                            <Bar dataKey="due_count" fill="#0ea5e9" />
+                            <CartesianGrid stroke={chartGridColor} strokeDasharray="3 3" />
+                            <XAxis
+                              dataKey="date"
+                              tickFormatter={formatXAxisDate}
+                              interval="preserveStartEnd"
+                              minTickGap={28}
+                              tick={{ fill: chartAxisColor, fontSize: 12 }}
+                              label={{ value: "Date", position: "insideBottom", offset: -8 }}
+                            />
+                            <YAxis tick={{ fill: chartAxisColor, fontSize: 12 }} />
+                            <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: theme.palette.text.primary }} />
+                            <Bar dataKey="due_count" fill={theme.palette.primary.main} />
                           </BarChart>
                         </ResponsiveContainer>
                       </Box>
@@ -295,11 +396,18 @@ function Analytics() {
                       <Box sx={{ width: "100%", height: 280 }}>
                         <ResponsiveContainer>
                           <LineChart data={stabilityTrend}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="date" hide />
-                            <YAxis />
-                            <Tooltip />
-                            <Line type="monotone" dataKey="avg_stability" stroke="#0f766e" dot={false} />
+                            <CartesianGrid stroke={chartGridColor} strokeDasharray="3 3" />
+                            <XAxis
+                              dataKey="date"
+                              tickFormatter={formatXAxisDate}
+                              interval="preserveStartEnd"
+                              minTickGap={28}
+                              tick={{ fill: chartAxisColor, fontSize: 12 }}
+                              label={{ value: "Date", position: "insideBottom", offset: -8 }}
+                            />
+                            <YAxis tick={{ fill: chartAxisColor, fontSize: 12 }} />
+                            <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: theme.palette.text.primary }} />
+                            <Line type="monotone" dataKey="avg_stability" stroke={theme.palette.primary.main} dot={false} />
                           </LineChart>
                         </ResponsiveContainer>
                       </Box>
@@ -321,11 +429,16 @@ function Analytics() {
                       <Box sx={{ width: "100%", height: 300 }}>
                         <ResponsiveContainer>
                           <BarChart data={topicSummary}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="topic_name" />
-                            <YAxis />
-                            <Tooltip />
-                            <Bar dataKey="theta" fill="#0f766e" name="Theta" />
+                            <CartesianGrid stroke={chartGridColor} strokeDasharray="3 3" />
+                            <XAxis
+                              dataKey="topic_name"
+                              interval={0}
+                              tick={{ fill: chartAxisColor, fontSize: 12 }}
+                              label={{ value: "Topic", position: "insideBottom", offset: -8 }}
+                            />
+                            <YAxis tick={{ fill: chartAxisColor, fontSize: 12 }} />
+                            <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: theme.palette.text.primary }} />
+                            <Bar dataKey="theta" fill={theme.palette.primary.main} name="Theta" />
                           </BarChart>
                         </ResponsiveContainer>
                       </Box>
@@ -347,14 +460,18 @@ function Analytics() {
                       <Box sx={{ width: "100%", height: 320 }}>
                         <ResponsiveContainer>
                           <LineChart data={questionRows}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="question_id" />
-                            <YAxis yAxisId="left" domain={[0, 1]} />
-                            <YAxis yAxisId="right" orientation="right" />
-                            <Tooltip />
-                            <Legend />
-                            <Line yAxisId="left" type="monotone" dataKey="pass_rate" stroke="#0ea5e9" name="Pass Rate" />
-                            <Line yAxisId="right" type="monotone" dataKey="irt_b_drift" stroke="#f97316" name="IRT b Drift" />
+                            <CartesianGrid stroke={chartGridColor} strokeDasharray="3 3" />
+                            <XAxis
+                              dataKey="question_id"
+                              tick={{ fill: chartAxisColor, fontSize: 12 }}
+                              label={{ value: "Question ID", position: "insideBottom", offset: -8 }}
+                            />
+                            <YAxis yAxisId="left" domain={[0, 1]} tick={{ fill: chartAxisColor, fontSize: 12 }} />
+                            <YAxis yAxisId="right" orientation="right" tick={{ fill: chartAxisColor, fontSize: 12 }} />
+                            <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: theme.palette.text.primary }} />
+                            <Legend wrapperStyle={{ color: theme.palette.text.primary }} />
+                            <Line yAxisId="left" type="monotone" dataKey="pass_rate" stroke={theme.palette.primary.light} name="Pass Rate" />
+                            <Line yAxisId="right" type="monotone" dataKey="irt_b_drift" stroke={theme.palette.secondary.main} name="IRT b Drift" />
                           </LineChart>
                         </ResponsiveContainer>
                       </Box>

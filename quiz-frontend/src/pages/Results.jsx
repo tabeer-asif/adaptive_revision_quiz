@@ -7,9 +7,10 @@ function Results() {
   const navigate = useNavigate();
 
   const score = location.state?.score || 0;
-  const total = location.state?.total || 1;
+  const total = Math.max(0, Number(location.state?.total ?? 0));
+  const exitedEarly = Boolean(location.state?.exitedEarly);
 
-  const percentage = Math.round((score / total) * 100);
+  const percentage = total > 0 ? Math.round((score / total) * 100) : 0;
 
   return (
     <Box
@@ -30,6 +31,12 @@ function Results() {
             You scored {score} out of {total}
           </Typography>
 
+          {exitedEarly && (
+            <Typography align="center" color="text.secondary" sx={{ mb: 2 }}>
+              Quiz ended early. Your progress so far is saved in this summary.
+            </Typography>
+          )}
+
           {/* Progress bar */}
           <LinearProgress
             variant="determinate"
@@ -43,7 +50,9 @@ function Results() {
 
           {/* ✅ General Feedback message */}
           <Typography align="center" sx={{ mt: 2, mb: 3 }}>
-            {percentage >= 80
+            {total === 0
+              ? "Start another quiz whenever you're ready."
+              : percentage >= 80
               ? "🔥 Great job! You're mastering this topic."
               : percentage >= 50
               ? "📘 Keep practicing — you're getting there!"

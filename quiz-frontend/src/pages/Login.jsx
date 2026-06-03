@@ -86,13 +86,18 @@ function Login() {
         justifyContent: "center",
         alignItems: "center",
         minHeight: "100vh",
+      p: 2,
         }}
     >
-        <Card sx={{ width: 400, p: 2, borderRadius: 3 }}>
+      <Card sx={{ width: "100%", maxWidth: 420, p: { xs: 1.5, sm: 2 }, borderRadius: 3 }}>
         <CardContent>
-            <Typography variant="h4" gutterBottom align="center">
+        <Typography variant="h4" gutterBottom align="center" sx={{ mb: 0.5 }}>
             Login
             </Typography>
+
+        <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 2 }}>
+          Continue your revision streak.
+        </Typography>
 
             <TextField
             label="Email"

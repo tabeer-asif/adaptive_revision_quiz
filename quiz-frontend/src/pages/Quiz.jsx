@@ -14,6 +14,12 @@ import {
   Alert,
   LinearProgress,
   Paper,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  Chip,
 } from "@mui/material";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -22,6 +28,15 @@ import MathText from "../components/MathText";
 
 const API_URL = process.env.REACT_APP_API_URL;
 const SUPPORTED_TYPES = ["MCQ", "MULTI_MCQ", "NUMERIC", "SHORT", "OPEN"];
+function formatDifficultyChipLabel(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `Difficulty: ${Math.min(5, Math.max(1, Math.round(value)))}`;
+  }
+  if (typeof value === "string" && value.trim()) {
+    return `Difficulty: ${value.trim()}`;
+  }
+  return "Difficulty: Unspecified";
+}
 
 function Quiz() {
   const [currentQuestion, setCurrentQuestion] = useState(null);
@@ -42,6 +57,7 @@ function Quiz() {
   const [explanationError, setExplanationError] = useState("");
   const [lastSubmit, setLastSubmit] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [exitDialogOpen, setExitDialogOpen] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -407,6 +423,25 @@ function Quiz() {
     }
   };
 
+  const handleExitQuiz = () => {
+    setExitDialogOpen(true);
+  };
+
+  const confirmExitQuiz = () => {
+    setExitDialogOpen(false);
+    navigate("/results", {
+      state: {
+        score,
+        total: questionCount,
+        exitedEarly: true,
+      },
+    });
+  };
+
+  const cancelExitQuiz = () => {
+    setExitDialogOpen(false);
+  };
+
   const handleExplain = async () => {
     if (!currentQuestion || !lastSubmit) return;
     setExplanationLoading(true);
@@ -491,6 +526,9 @@ function Quiz() {
       >
         <CardContent>
           <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mb: 1 }}>
+            <Button variant="outlined" color="warning" size="small" onClick={handleExitQuiz}>
+              Exit Quiz
+            </Button>
             <Button variant="outlined" size="small" onClick={() => navigate(-1)}>
               Back
             </Button>
@@ -512,9 +550,16 @@ function Quiz() {
             </Typography>
           </Box>
 
-          <Typography variant="h5" gutterBottom>
-            Question {questionCount + 1}
-          </Typography>
+          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 1, mb: 1.25 }}>
+            <Typography variant="h5" sx={{ mb: 0 }}>
+              Question {questionCount + 1}
+            </Typography>
+            <Chip
+              label={formatDifficultyChipLabel(currentQuestion.difficulty)}
+              size="small"
+              variant="outlined"
+            />
+          </Box>
           <Typography variant="subtitle1" component="div" sx={{ mb: 2 }}>
             <MathText text={currentQuestion.text} />
           </Typography>
@@ -655,6 +700,21 @@ function Quiz() {
         topicId={currentQuestion?.topic_id}
         initialExplanation={explanationData?.explanation ?? null}
       />
+
+      <Dialog open={exitDialogOpen} onClose={cancelExitQuiz}>
+        <DialogTitle>Exit quiz early?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            You can leave now and keep the progress from the questions you have already completed.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={cancelExitQuiz}>Cancel</Button>
+          <Button color="warning" variant="contained" onClick={confirmExitQuiz}>
+            Exit Quiz
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

@@ -30,6 +30,7 @@ const MCQ_QUESTION = {
   id: "q1",
   type: "MCQ",
   text: "What is 2 + 2?",
+  difficulty: 3,
   options: { A: "3", B: "4", C: "5" },
 };
 
@@ -89,6 +90,35 @@ describe("Quiz page", () => {
     expect(screen.getByRole("progressbar")).toBeInTheDocument();
   });
 
+  it("allows the user to exit the quiz early", async () => {
+    localStorage.setItem("token", "tok");
+    mockInitFetch(5, MCQ_QUESTION);
+
+    renderQuiz();
+    await screen.findByText("What is 2 + 2?");
+
+    await userEvent.click(screen.getByRole("button", { name: /Exit Quiz/i }));
+
+    expect(screen.getByText(/Exit quiz early/i)).toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalledWith(
+      "/results",
+      expect.anything()
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Exit Quiz$/i }));
+
+    expect(mockNavigate).toHaveBeenCalledWith(
+      "/results",
+      expect.objectContaining({
+        state: expect.objectContaining({
+          score: 0,
+          total: 0,
+          exitedEarly: true,
+        }),
+      })
+    );
+  });
+
   it("shows 'No questions available' when no question can be fetched", async () => {
     localStorage.setItem("token", "tok");
     global.fetch = jest.fn()
@@ -116,6 +146,7 @@ describe("Quiz page", () => {
     await waitFor(() => {
       expect(screen.getByText("What is 2 + 2?")).toBeInTheDocument();
     });
+    expect(screen.getByText("Difficulty: 3")).toBeInTheDocument();
     expect(screen.getByLabelText("A: 3")).toBeInTheDocument();
     expect(screen.getByLabelText("B: 4")).toBeInTheDocument();
   });

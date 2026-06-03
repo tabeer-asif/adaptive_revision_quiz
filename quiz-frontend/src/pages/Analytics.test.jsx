@@ -12,6 +12,7 @@ jest.mock("recharts", () => {
     CartesianGrid: Mock,
     Legend: Mock,
     Line: Mock,
+    ReferenceLine: Mock,
     XAxis: Mock,
     YAxis: Mock,
     Tooltip: Mock,
@@ -59,7 +60,7 @@ describe("Analytics page", () => {
         {
           topic_id: 1,
           topic_name: "Biology",
-          points: [{ created_at: "2026-05-01", theta_before: 0.1, theta_after: 0.2 }],
+          points: [{ created_at: "2026-05-01", theta_before: 0.1, theta_after: 0.2, posterior_sd: 0.9 }],
         },
       ],
     });
