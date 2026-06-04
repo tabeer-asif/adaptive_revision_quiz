@@ -39,7 +39,7 @@ def get_theta_progression(
 
     query = (
         supabase_db.table("review_logs")
-        .select("topic_id,theta_before,theta_after,created_at")
+        .select("topic_id,theta_before,theta_after,posterior_sd,created_at")
         .eq("user_id", user_id)
         .gte("created_at", _iso_utc_days_ago(days))
         .order("created_at")
@@ -72,6 +72,7 @@ def get_theta_progression(
                 "created_at": row.get("created_at"),
                 "theta_before": row.get("theta_before"),
                 "theta_after": row.get("theta_after"),
+                "posterior_sd": row.get("posterior_sd"),
             }
         )
 
@@ -96,7 +97,7 @@ def get_topic_summary(user=Depends(get_current_user)):
 
     theta_rows = (
         supabase_db.table("user_topic_theta")
-        .select("topic_id,theta,n_responses,theta_variance,is_calibrated,last_updated")
+        .select("topic_id,theta,n_responses,posterior_sd,is_calibrated,last_updated")
         .eq("user_id", user_id)
         .order("topic_id")
         .execute()
@@ -123,7 +124,7 @@ def get_topic_summary(user=Depends(get_current_user)):
             "topic_name": topic_name_map.get(row.get("topic_id"), f"Topic {row.get('topic_id')}"),
             "theta": row.get("theta"),
             "n_responses": row.get("n_responses", 0),
-            "theta_variance": row.get("theta_variance"),
+            "posterior_sd": row.get("posterior_sd"),
             "is_calibrated": row.get("is_calibrated", False),
             "last_updated": row.get("last_updated"),
         }

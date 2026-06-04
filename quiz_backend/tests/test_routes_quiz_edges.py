@@ -48,7 +48,6 @@ def test_submit_answer_multi_mcq_threshold_paths(monkeypatch):
     # score=0.4 -> fallback 2PL branch when thresholds missing
     monkeypatch.setattr(quiz_routes, "score_multi_mcq", lambda selected, correct: 0.4)
     monkeypatch.setattr(quiz_routes, "get_fsrs_rating", lambda *args, **kwargs: SimpleNamespace(value=1))
-    monkeypatch.setattr(quiz_routes, "update_theta_2pl", lambda theta, a, b, signal, lr: theta + 0.1)
 
     db = StubSupabaseDB({
         ("questions", "select"): [{"data": [{
@@ -80,7 +79,6 @@ def test_submit_answer_multi_mcq_threshold_paths(monkeypatch):
 
     # score=0.6 with thresholds present -> GRM branch, category=1
     monkeypatch.setattr(quiz_routes, "score_multi_mcq", lambda selected, correct: 0.6)
-    monkeypatch.setattr(quiz_routes, "update_theta_grm", lambda theta, a, thresholds, cat, lr: theta + 0.2)
 
     db2 = StubSupabaseDB({
         ("questions", "select"): [{"data": [{
@@ -151,7 +149,6 @@ def test_submit_answer_numeric_short_open_and_existing_card(monkeypatch):
     monkeypatch.setattr(quiz_routes, "validate_numeric_tolerance", lambda t: 0.0)
     monkeypatch.setattr(quiz_routes, "score_numeric", lambda user, correct, tol: 1.0)
     monkeypatch.setattr(quiz_routes, "get_fsrs_rating", lambda *args, **kwargs: SimpleNamespace(value=4))
-    monkeypatch.setattr(quiz_routes, "update_theta_2pl", lambda theta, a, b, signal, lr: theta + 0.3)
 
     existing_due = datetime.now(timezone.utc).isoformat()
     db = StubSupabaseDB({
@@ -176,7 +173,7 @@ def test_submit_answer_numeric_short_open_and_existing_card(monkeypatch):
             "step": 1,
         }]}],
         ("fsrs_cards", "upsert"): [{"data": [{"id": 1}]}],
-        ("user_topic_theta", "select"): [{"data": [{"theta": 0.1, "theta_variance": 0.8, "n_responses": 10, "is_calibrated": False}]}],
+        ("user_topic_theta", "select"): [{"data": [{"theta": 0.1, "posterior_sd": 0.8, "n_responses": 10, "is_calibrated": False}]}],
         ("review_logs", "insert"): [{"data": [{"id": 1}]}],
         ("user_topic_theta", "upsert"): [{"data": [{"topic_id": 9}]}],
         ("questions", "update"): [{"data": [{"id": 20}]}],
@@ -189,7 +186,7 @@ def test_submit_answer_numeric_short_open_and_existing_card(monkeypatch):
     )
     assert out["correct"] is True
     updates = db.last_payloads[("questions", "update")]
-    assert "irt_b" in updates
+    assert "irt_b" not in updates
 
     monkeypatch.setattr(quiz_routes, "validate_short_text", lambda s: "student text")
     monkeypatch.setattr(quiz_routes, "score_short", lambda submitted, keywords, model: (True, 0.8))

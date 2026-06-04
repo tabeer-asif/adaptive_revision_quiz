@@ -3,19 +3,20 @@ from fastapi import APIRouter, HTTPException, Depends
 from app.dependencies.auth import get_current_user
 from app.supabase_client import supabase_db
 from datetime import datetime, timezone
-import math
 from app.schemas.quiz import SubmitAnswerRequest
 from fsrs import Card, Rating, Scheduler, State
 from app.services.irt import (
+    eap_estimate,
     get_fsrs_rating, 
     score_mcq, 
-    score_multi_mcq, 
+    score_multi_mcq,
     score_numeric,
     score_short,
-    update_theta_2pl,
-    update_theta_3pl,
-    update_theta_grm,
 
+)
+from app.services.learner_eap import (
+    format_response_for_eap,
+    load_topic_response_history,
 )
 from app.utils.quiz_validation import (
     validate_question_exists,
@@ -66,7 +67,6 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
     - Updates FSRS card (stability, difficulty, due)
     - Logs the attempt
     - Updates IRT theta (user ability)
-    - Updates question difficulty b automatically
     """
     
     user_id = str(user.id) # Convert UUID to string for DB compatibility
@@ -211,68 +211,24 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
 
     topic_id = question["topic_id"]
     theta_resp = supabase_db.table("user_topic_theta") \
-    .select("*") \
-    .eq("user_id", user_id) \
-    .eq("topic_id", topic_id) \
-    .execute()
+        .select("*") \
+        .eq("user_id", user_id) \
+        .eq("topic_id", topic_id) \
+        .execute()
 
-    a = question.get("irt_a", 1.0)
-    b = question.get("irt_b", 0.0)
+    theta_before = float(theta_resp.data[0].get("theta", 0.0)) if theta_resp.data else 0.0
 
-    if theta_resp.data:
-        theta = theta_resp.data[0]["theta"]
-        theta_variance = theta_resp.data[0]["theta_variance"]
-        n_responses = theta_resp.data[0]["n_responses"]
-        is_calibrated = theta_resp.data[0].get("is_calibrated")
-    else:
-        # Cold start — first time user sees this topic
-        theta = 0.0
-        theta_variance = 1.0
-        n_responses = 0
-        is_calibrated = False
+    # Keep review_logs insertion below this block to avoid double-counting
+    # the current response when reconstructing EAP history from review_logs.
+    history_responses = load_topic_response_history(supabase_db, user_id, topic_id)
+    current_response = format_response_for_eap(question, question_type, score, correct)
+    eap_responses = history_responses + [current_response]
+    theta_new, posterior_sd = eap_estimate(eap_responses)
+    n_responses = len(eap_responses)
+    is_calibrated = n_responses >= 10 and posterior_sd < 0.5
 
-
-    if question_type == "MULTI_MCQ":
-        irt_signal = 1 if score >= 0.7 else 0 # use partial credit score for multi-MCQ
-    elif question_type == "OPEN":
-        irt_signal = 1 if (self_rating is not None and self_rating >= 3) else 0
-    else:
-        irt_signal = 1 if correct else 0 # binary signal for IRT (MCQ, NUMERIC, OPEN)
-
-    
-    learning_rate = max(0.1, 0.5 - 0.05 * n_responses)  # decaying rate
-    
-    if question_type == "MCQ":
-        c = question.get("irt_c")  # guessing parameter for MCQ
-        theta_new = update_theta_3pl(theta, a, b, c, irt_signal, learning_rate)
-    
-    elif question_type == "MULTI_MCQ":
-        b_thresholds = question.get("irt_thresholds")  # your jsonb column
-        if not b_thresholds:
-            # fallback to 2PL binary if no thresholds stored yet
-            theta_new = update_theta_2pl(theta, a, b, irt_signal, learning_rate)
-        else:
-            # GRM expects ordinal category not binary signal
-            if score == 1.0:   grm_category = 2
-            elif score >= 0.5: grm_category = 1
-            else:              grm_category = 0
-            theta_new = update_theta_grm(theta, a, b_thresholds, grm_category, learning_rate)
-    
-    elif question_type in ["NUMERIC", "SHORT"]:
-        theta_new = update_theta_2pl(theta, a, b, irt_signal, learning_rate)
-    
-    elif question_type == "OPEN":
-        # For open-ended questions, we might want to update theta less aggressively since correctness is subjective
-
-        theta_new = update_theta_2pl(theta, a, b, irt_signal, learning_rate * 0.5)
-    
-    else:  # pragma: no cover - unreachable due to earlier type guard
-        # Fallback — should never reach here given type validation above
-        theta_new = theta  # no update, safe default
-
-    
     # -----------------------------
-    # 6. Log to review_logs table for analytics and future insights after UPDATE THETA
+    # 6. Log to review_logs table for analytics and future insights
     # -----------------------------
 
     supabase_db.table("review_logs").insert({
@@ -284,9 +240,14 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
         "correct": correct,
         "response_time": response_time,
         "fsrs_rating": rating.value,
-        "irt_signal": irt_signal,
-        "theta_before": theta,
+        "irt_signal": 1 if correct else 0,
+        "theta_before": theta_before,
         "theta_after": theta_new,
+        "posterior_sd": posterior_sd,
+        "scheduled_days": (card.due - card.last_review).total_seconds() / 86400 if card.last_review else None,
+        "stability": card.stability,
+        "difficulty": card.difficulty,
+        "fsrs_state": card.state.value,
         "created_at": datetime.now(timezone.utc).isoformat()
     }).execute()
 
@@ -294,45 +255,24 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
         "user_id": user_id,
         "topic_id": topic_id,
         "theta": theta_new,
-        "theta_variance": max(0.1, theta_variance * 0.95),  # optional: decrease variance as we get more data
-        "n_responses": n_responses + 1,
+        "posterior_sd": posterior_sd,
+        "n_responses": n_responses,
         "last_updated": datetime.now(timezone.utc).isoformat(),
-        # FIX — mark calibrated after enough responses
-        "is_calibrated": is_calibrated or ((n_responses + 1) >= 15)
+        "is_calibrated": is_calibrated,
     }, on_conflict="user_id,topic_id").execute()
 
     # -----------------------------
     # 7. Update question calibration tracking stats
     # -----------------------------
-    '''
-    learning_rate_b = 0.05
-    adaptive_lr_b = learning_rate_b  
-    error = (1 if correct else 0) - p
-    b_new = b - adaptive_lr_b * a * error
-    
-
-    supabase_db.table("questions").update({
-        "irt_b": b_new
-    }).eq("id", question_id).execute()
-    '''
-    
-    
     n_responses_q = question.get("n_responses", 0) + 1
     n_correct_q = question.get("n_correct", 0) + (1 if correct else 0)
-    pass_rate = n_correct_q / n_responses_q
 
-    # Only update b once we have enough data
+    # Track item usage stats only; irt_b is treated as pre-calibrated.
     updates = {
         "n_responses": n_responses_q,
         "n_correct": n_correct_q,
         "is_calibrated": n_responses_q >= 10
     }
-
-    if n_responses_q >= 10:
-        # Data-driven b update from pass rate
-        if 0.05 < pass_rate < 0.95:
-            logit = math.log(pass_rate / (1 - pass_rate))
-            updates["irt_b"] = -logit  # higher pass rate → easier → lower b
 
     supabase_db.table("questions").update(updates).eq("id", question_id).execute()
     

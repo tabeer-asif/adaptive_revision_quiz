@@ -61,13 +61,15 @@ def test_submit_answer_mcq_success(monkeypatch):
     monkeypatch.setattr(quiz_routes, "scheduler", FakeScheduler())
     monkeypatch.setattr(quiz_routes, "Card", FakeCard)
     monkeypatch.setattr(quiz_routes, "get_fsrs_rating", lambda *args, **kwargs: SimpleNamespace(value=3))
-    monkeypatch.setattr(quiz_routes, "update_theta_3pl", lambda theta, a, b, c, response, learning_rate: theta + 0.2)
 
     request = SubmitAnswerRequest(question_id=7, selected_option="A", response_time=4.0)
     out = quiz_routes.submit_answer(request, user=FakeUser("u1"))
 
     assert out["correct"] is True
     assert "next_review" in out
+    review_payload = db.last_payloads[("review_logs", "insert")]
+    assert "posterior_sd" in review_payload
+    assert review_payload["posterior_sd"] > 0
 
 
 def test_submit_answer_question_not_found(monkeypatch):

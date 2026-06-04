@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # ── Initialise client once ──────────────────────────────────────────
 client = genai.Client(api_key=settings.GEMINI_API_KEY)
-MODEL = "gemini-3-flash-preview"   # ← updated model
+MODEL = "gemini-3.5-flash"   # ← updated model
 
 
 # ── Supported file types ────────────────────────────────────────────
@@ -800,7 +800,7 @@ def format_user_answer(question: dict, user_answer: dict) -> str:
     return str(user_answer)
 
 
-def format_correct_answer(question: dict) -> str:
+def format_correct_answer_for_prompt(question: dict) -> str:
     q_type = question.get("type", "")
     answer = question.get("answer")
     options = question.get("options") or {}
@@ -839,7 +839,7 @@ async def generate_explanation(
     prompt = EXPLANATION_PROMPT.format(
         question_text=question.get("text", ""),
         question_type=question.get("type", ""),
-        correct_answer=format_correct_answer(question),
+        correct_answer=format_correct_answer_for_prompt(question),
         user_answer=format_user_answer(question, user_answer),
         ability_description=ability_description(theta),
         accuracy_description=accuracy_description,
@@ -895,7 +895,7 @@ async def generate_chat_reply(
     """
     system_prompt = CHAT_SYSTEM_PROMPT.format(
         question_text=question.get("text", ""),
-        correct_answer=format_correct_answer(question),
+        correct_answer=format_correct_answer_for_prompt(question),
         user_answer=format_user_answer(question, user_answer),
         ability_description=ability_description(theta),
     )

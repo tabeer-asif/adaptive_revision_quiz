@@ -11,11 +11,19 @@ from app.utils.math_text import normalize_question_math_fields
 import json
 
 IRT_DEFAULTS = {
-    "easy":   {"irt_a": 1.0, "irt_b": -1.0},
-    "medium": {"irt_a": 1.0, "irt_b":  0.0},
-    "hard":   {"irt_a": 1.2, "irt_b":  1.0},
+    "very_easy": {"irt_a": 1.0, "irt_b": -1.0},
+    "easy":      {"irt_a": 1.0, "irt_b": -0.5},
+    "medium":    {"irt_a": 1.0, "irt_b":  0.0},
+    "hard":      {"irt_a": 1.1, "irt_b":  0.5},
+    "very_hard": {"irt_a": 1.2, "irt_b":  1.0},
 }
-DIFFICULTY_LABEL = {1: "easy", 2: "easy", 3: "medium", 4: "hard", 5: "hard"}
+DIFFICULTY_LABEL = {
+    1: "very_easy",
+    2: "easy",
+    3: "medium",
+    4: "hard",
+    5: "very_hard",
+}
 
 def get_irt_defaults(difficulty: int) -> dict:
     label = DIFFICULTY_LABEL.get(difficulty or 1, "medium")

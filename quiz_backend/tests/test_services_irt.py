@@ -11,17 +11,19 @@ from app.services import irt
 
 
 def test_irt_probabilities_and_updates():
-    # Probability helpers and theta update functions should move theta upward on correct response.
+    # Probability helpers and EAP should produce sensible values.
     p2 = irt.irt_prob_2pl(theta=0.0, a=1.0, b=0.0)
     assert 0.49 < p2 < 0.51
 
     p3 = irt.irt_prob_3pl(theta=0.0, a=1.0, b=0.0, c=0.25)
     assert 0.62 < p3 < 0.63
 
-    t2 = irt.update_theta_2pl(theta=0.0, a=1.0, b=0.0, response=1)
-    t3 = irt.update_theta_3pl(theta=0.0, a=1.0, b=0.0, c=0.25, response=1)
-    assert t2 > 0
-    assert t3 > 0
+    theta_hat, posterior_sd = irt.eap_estimate([
+        {"item_type": "2pl", "correct": True, "a": 1.0, "b": 0.0},
+        {"item_type": "3pl", "correct": True, "a": 1.0, "b": 0.0, "c": 0.25},
+    ])
+    assert theta_hat > 0
+    assert posterior_sd > 0
 
 
 def test_default_thresholds_and_grm():
@@ -32,8 +34,8 @@ def test_default_thresholds_and_grm():
     probs = irt.grm_probabilities(theta=0.0, a=1.0, b_thresholds=[-0.5, 0.5])
     assert math.isclose(sum(probs), 1.0, rel_tol=1e-6)
 
-    updated = irt.update_theta_grm(theta=0.0, a=1.0, b_thresholds=[-0.5, 0.5], observed_category=2)
-    assert updated > 0
+    pcat = irt.grm_category_probability(theta=0.0, a=1.0, b_thresholds=[-0.5, 0.5], category=2)
+    assert 0.0 < pcat < 1.0
 
 
 def test_scoring_helpers():

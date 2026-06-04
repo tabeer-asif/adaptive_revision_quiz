@@ -15,12 +15,14 @@ def test_theta_progression_returns_series(client, auth_headers, make_db):
                             "topic_id": 1,
                             "theta_before": -0.2,
                             "theta_after": 0.1,
+                            "posterior_sd": 0.82,
                             "created_at": "2026-05-01T10:00:00+00:00",
                         },
                         {
                             "topic_id": 1,
                             "theta_before": 0.1,
                             "theta_after": 0.25,
+                            "posterior_sd": 0.74,
                             "created_at": "2026-05-03T10:00:00+00:00",
                         },
                     ]
@@ -38,6 +40,7 @@ def test_theta_progression_returns_series(client, auth_headers, make_db):
     assert len(body["series"]) == 1
     assert body["series"][0]["topic_name"] == "Biology"
     assert body["series"][0]["points"][0]["theta_before"] == -0.2
+    assert body["series"][0]["points"][0]["posterior_sd"] == 0.82
 
 
 def test_topic_summary_returns_theta_and_response_count(client, auth_headers, make_db):

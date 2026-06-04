@@ -1,6 +1,8 @@
 # app/services/irt.py
 
 import math
+from typing import Any, Dict, List, Tuple
+
 from fsrs import Rating
 from rapidfuzz import fuzz
 
@@ -23,21 +25,6 @@ def irt_prob_3pl(theta: float, a: float, b: float, c: float) -> float:
         return c + (1 - c) / (1 + math.exp(-a * (theta - b)))
     except OverflowError:
         return 1.0 if theta > b else c
-
-def update_theta_2pl(theta, a, b, response, learning_rate=0.3) -> float:
-    p = irt_prob_2pl(theta, a, b)  # your IRT model
-    # response = 1 (correct) or 0 (incorrect)
-    delta = learning_rate * a * (response - p)
-    return theta + delta
-
-def update_theta_3pl(theta, a, b, c, response, lr=0.3) -> float:
-    if c is None:
-        c = 0.25 # default guessing parameter if not provided
-    p = irt_prob_3pl(theta, a, b, c)
-    # 3PL gradient is slightly different — weight by (P - c)
-    weight = (p - c) / (p * (1 - c) +  1e-9) # epsilon to avoid div by zero
-    delta = lr * a * weight * (response - p)
-    return theta + delta
 
 def default_grm_thresholds(b: float) -> list[float]:
     """
@@ -78,12 +65,77 @@ def grm_probabilities(theta, a, b_thresholds) -> list[float]:
     return category_probs
 
 
-def update_theta_grm(theta, a, b_thresholds, observed_category, lr=0.3) -> float:
-    probs = grm_probabilities(theta, a, b_thresholds)
-    expected = sum(k * p for k, p in enumerate(probs))
-    # Gradient approximation
-    delta = lr * a * (observed_category - expected)
-    return theta + delta
+THETA_GRID = [-4.0 + (8.0 * i / 40.0) for i in range(41)]
+PRIOR_WEIGHTS = [math.exp(-0.5 * theta ** 2) for theta in THETA_GRID]
+_PRIOR_TOTAL = sum(PRIOR_WEIGHTS) or 1.0
+PRIOR_WEIGHTS = [weight / _PRIOR_TOTAL for weight in PRIOR_WEIGHTS]
+
+
+def grm_category_probability(theta: float, a: float, b_thresholds: List[float], category: int) -> float:
+    thresholds = sorted(b_thresholds or [])
+    if not thresholds:
+        return irt_prob_2pl(theta, a, 0.0)
+
+    category = max(0, min(int(category), len(thresholds)))
+
+    def cumulative(b_value: float) -> float:
+        return irt_prob_2pl(theta, a, b_value)
+
+    if category == 0:
+        return 1.0 - cumulative(thresholds[0])
+    if category == len(thresholds):
+        return cumulative(thresholds[-1])
+
+    return cumulative(thresholds[category - 1]) - cumulative(thresholds[category])
+
+
+def compute_log_likelihood(responses: List[Dict[str, Any]], theta_grid: List[float]) -> List[float]:
+    log_likelihood = [0.0 for _ in theta_grid]
+
+    for response in responses:
+        item_type = response.get("item_type")
+        a = float(response.get("a") or 1.0)
+
+        for index, theta in enumerate(theta_grid):
+            if item_type == "3pl":
+                p = irt_prob_3pl(theta, a, float(response.get("b") or 0.0), float(response.get("c") or 0.25))
+                p = min(max(p, 1e-10), 1 - 1e-10)
+                log_likelihood[index] += math.log(p) if response.get("correct") else math.log(1.0 - p)
+            elif item_type == "2pl":
+                p = irt_prob_2pl(theta, a, float(response.get("b") or 0.0))
+                p = min(max(p, 1e-10), 1 - 1e-10)
+                log_likelihood[index] += math.log(p) if response.get("correct") else math.log(1.0 - p)
+            elif item_type == "grm":
+                p = grm_category_probability(theta, a, list(response.get("b_list") or []), int(response.get("score") or 0))
+                p = min(max(p, 1e-10), 1.0)
+                log_likelihood[index] += math.log(p)
+
+    return log_likelihood
+
+
+def eap_estimate(
+    responses: List[Dict[str, Any]],
+    theta_grid: List[float] = THETA_GRID,
+    prior_weights: List[float] = PRIOR_WEIGHTS,
+) -> Tuple[float, float]:
+    if not responses:
+        return 0.0, 1.0
+
+    log_lik = compute_log_likelihood(responses, theta_grid)
+    max_log_lik = max(log_lik)
+    likelihood = [math.exp(value - max_log_lik) for value in log_lik]
+
+    posterior_unnorm = [like * prior for like, prior in zip(likelihood, prior_weights)]
+    total = sum(posterior_unnorm)
+    if total < 1e-300:
+        return 0.0, 1.0
+
+    posterior = [value / total for value in posterior_unnorm]
+    theta_hat = sum(theta * weight for theta, weight in zip(theta_grid, posterior))
+    variance = sum(((theta - theta_hat) ** 2) * weight for theta, weight in zip(theta_grid, posterior))
+    posterior_sd = math.sqrt(max(variance, 0.0))
+
+    return float(theta_hat), float(posterior_sd)
 
 def score_mcq(selected_key, db_answer) -> float:
     correct_key = str(db_answer).strip() if db_answer is not None else ""
@@ -147,7 +199,11 @@ def select_best_question_per_topic(theta_map, questions, target=None):
 
         if target is None:
             # Calibration mode — maximise Fisher Information
-            fisher = (a ** 2) * p * (1 - p)
+            if q["type"] == "MCQ" and c is not None and c < 1.0:
+                p_clipped = max(min(p, 1 - 1e-10), 1e-10)
+                fisher = (a ** 2) * (((p_clipped - c) ** 2) / ((1 - c) ** 2)) * ((1 - p_clipped) / p_clipped)
+            else:
+                fisher = (a ** 2) * p * (1 - p)
             if fisher > best_fisher:
                 best_fisher = fisher
                 best_q = q

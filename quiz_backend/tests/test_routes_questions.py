@@ -14,7 +14,10 @@ from tests.conftest import StubSupabaseDB, FakeUser
 def test_helpers_and_answers_differ():
     # Basic helper behavior used by create/update flows.
     assert q_routes.get_irt_defaults(1)["irt_b"] == -1.0
-    assert q_routes.get_irt_defaults(4)["irt_b"] == 1.0
+    assert q_routes.get_irt_defaults(2)["irt_b"] == -0.5
+    assert q_routes.get_irt_defaults(3)["irt_b"] == 0.0
+    assert q_routes.get_irt_defaults(4)["irt_b"] == 0.5
+    assert q_routes.get_irt_defaults(5)["irt_b"] == 1.0
     assert q_routes.answers_differ({"a": 1}, {"a": 1}) is False
     assert q_routes.answers_differ({"a": 1}, {"a": 2}) is True
 
