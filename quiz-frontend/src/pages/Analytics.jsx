@@ -189,7 +189,6 @@ function Analytics() {
             <Button variant="contained" onClick={loadAnalytics}>
               Retry
             </Button>
-            <Button variant="outlined" onClick={() => navigate(-1)}>Back</Button>
             <Button variant="outlined" onClick={() => navigate("/home")}>Back to Home</Button>
           </Stack>
         </Stack>
