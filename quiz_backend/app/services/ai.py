@@ -12,6 +12,7 @@ import re
 from app.config import settings
 import asyncio
 import logging
+from app.supabase_client import supabase_db
 
 logger = logging.getLogger(__name__)
 
@@ -871,15 +872,424 @@ Question context:
   Correct answer: {correct_answer}
   Student's answer: {user_answer}
   Student level: {ability_description}
+{feedback_context}
 
 Your role:
 - Answer the student's follow-up questions about THIS question and the concepts it covers
 - Keep answers concise — 2 to 4 sentences unless the student asks for more detail
 - Use plain language appropriate to the student's level
+- If feedback context is present, do not mention it unless the student asks about feedback/hint/gaps/confusion explicitly
 - If the student asks something unrelated to this question or topic, gently redirect them back
 - Never just give answers to other questions — you are here to help them understand, not to do their work for them
 - Respond naturally, like a tutor would in person
 """
+
+
+OPEN_FEEDBACK_PROMPT_TEMPLATE = """
+You are a helpful computer science tutor giving feedback on a student's answer.
+
+Question: {question}
+
+Model Answer: {model_answer}
+
+Student Answer: {student_answer}
+
+Instructions:
+- Do NOT score or grade the answer
+- Do NOT say whether the answer is correct or incorrect explicitly
+- Focus purely on constructive, encouraging feedback
+- Compare the student's answer conceptually to the model answer
+- Identify key concepts they captured well
+- Identify key concepts they missed or explained poorly
+- Keep feedback concise (3-5 sentences max)
+- Use simple, friendly language appropriate for a student
+- Do NOT reveal the full model answer
+
+Respond in this exact JSON format:
+{{
+    "strengths": "<what the student explained well, be specific>",
+    "gaps": "<key concepts missing or incorrectly explained>",
+    "hint": "<a nudge towards what they missed, without giving it away>",
+    "encouragement": "<one short motivational sentence>"
+}}
+"""
+
+
+def build_open_feedback_prompt(question: str, model_answer: str, student_answer: str) -> str:
+    return OPEN_FEEDBACK_PROMPT_TEMPLATE.format(
+        question=question,
+        model_answer=model_answer,
+        student_answer=student_answer,
+    )
+
+
+def _strip_json_fence(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        while lines and lines[-1].strip() == "```":
+            lines.pop()
+        text = "\n".join(lines).strip()
+
+    if text.lower().startswith("json"):
+        text = text[4:].strip()
+
+    return text
+
+
+SESSION_FEEDBACK_PROMPT_TEMPLATE = """
+You are a helpful tutor writing a short post-session summary for a student.
+Use the current session and historical context below to describe progress in plain language.
+
+CURRENT SESSION
+- Questions answered: {questions_answered}
+- Accuracy: {accuracy}
+- Again ratings: {again_ratings}
+- Final ability estimate: {final_theta}
+- Termination reason: {termination_reason}
+
+HISTORICAL CONTEXT
+- Prior sessions on this topic: {prior_sessions}
+- Overall ability trend: {theta_trend}
+- Ability change across prior sessions: {theta_delta_total}
+- Calibration status: {calibration_status}
+- Persistent weak questions:
+{weak_questions}
+
+Instructions:
+- Write a concise, encouraging summary
+- Mention what improved or stayed strong this session
+- Reference the historical trend when useful
+- Mention persistent weaknesses without sounding negative
+- End with one specific action for next session
+- Do not use technical terms like theta, FSRS, posterior_sd, or calibration
+
+Return only valid JSON with this exact shape:
+{{
+    "headline": "<one sentence summary>",
+    "strengths": "<what went well, referencing history if relevant>",
+    "weaknesses": "<persistent or new weak areas>",
+    "trend": "<overall progress narrative across sessions>",
+    "action": "<one specific thing to focus on next>"
+}}
+"""
+
+
+SESSION_FEEDBACK_MAX_HISTORY_SESSIONS = 5
+SESSION_FEEDBACK_MAX_WEAK_QUESTIONS = 3
+SESSION_FEEDBACK_TIMEOUT_SECONDS = 12.0
+
+
+def _safe_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _format_ratio(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.0%}"
+
+
+def _format_number(value: float | int | None) -> str:
+    if value is None:
+        return "n/a"
+    if isinstance(value, int):
+        return str(value)
+    return f"{value:.2f}"
+
+
+def _build_session_feedback_context(
+    session_row: dict,
+    review_logs: list[dict],
+    history_rows: list[dict],
+    weak_questions: list[dict],
+    theta_row: dict | None,
+) -> dict:
+    accuracies = [1.0 if bool(row.get("correct")) else 0.0 for row in review_logs]
+    again_ratings = sum(1 for row in review_logs if row.get("fsrs_rating") == 1)
+    response_times = [float(row["response_time"]) for row in review_logs if isinstance(row.get("response_time"), (int, float))]
+
+    current_accuracy = _mean(accuracies)
+    current_avg_response_time = _mean(response_times)
+
+    theta_values = [float(row["final_theta"]) for row in history_rows if isinstance(row.get("final_theta"), (int, float))]
+    theta_delta_total = None
+    theta_trend = "stable"
+    if theta_values:
+        theta_delta_total = theta_values[-1] - theta_values[0] if len(theta_values) > 1 else theta_values[0]
+        if theta_delta_total > 0.1:
+            theta_trend = "improving"
+        elif theta_delta_total < -0.1:
+            theta_trend = "declining"
+
+    calibration_status = "unknown"
+    if isinstance(theta_row, dict):
+        if theta_row.get("is_calibrated"):
+            calibration_status = "calibrated"
+        else:
+            calibration_status = "still calibrating"
+
+    weak_question_lines = []
+    for question in weak_questions[:SESSION_FEEDBACK_MAX_WEAK_QUESTIONS]:
+        weak_question_lines.append(
+            f'- {question.get("text") or "Question"} (accuracy: {_format_ratio(question.get("accuracy"))}, seen in {question.get("sessions_seen_in", 0)} sessions)'
+        )
+    if not weak_question_lines:
+        weak_question_lines = ["- None identified yet"]
+
+    history_summary_lines = []
+    for row in history_rows[:SESSION_FEEDBACK_MAX_HISTORY_SESSIONS]:
+        history_summary_lines.append(
+            f'- session {row.get("id")}: accuracy {_format_ratio(row.get("accuracy"))}, final ability {_format_number(row.get("final_theta"))}, questions {row.get("questions_answered", 0)}'
+        )
+    if not history_summary_lines:
+        history_summary_lines = ["- This is the first recorded session for this topic."]
+
+    return {
+        "questions_answered": len(review_logs) if review_logs else int(session_row.get("questions_answered") or 0),
+        "accuracy": _format_ratio(current_accuracy),
+        "avg_response_time": _format_number(current_avg_response_time),
+        "again_ratings": again_ratings,
+        "final_theta": _format_number(session_row.get("final_theta")),
+        "termination_reason": _safe_text(session_row.get("termination_reason")) or "unknown",
+        "prior_sessions": "\n".join(history_summary_lines),
+        "theta_trend": theta_trend,
+        "theta_delta_total": _format_number(theta_delta_total),
+        "calibration_status": calibration_status,
+        "weak_questions": "\n".join(weak_question_lines),
+    }
+
+
+def _format_weak_question_stats(question_id: int | None, rows: list[dict], question_lookup: dict[int, dict]) -> dict:
+    attempts = len(rows)
+    if attempts == 0 or question_id is None:
+        return {}
+
+    correct_count = sum(1 for row in rows if bool(row.get("correct")))
+    session_ids = {row.get("session_id") for row in rows if row.get("session_id") is not None}
+    return {
+        "question_id": question_id,
+        "text": _safe_text(question_lookup.get(question_id, {}).get("text") or question_lookup.get(question_id, {}).get("question_text") or f"Question {question_id}"),
+        "type": _safe_text(question_lookup.get(question_id, {}).get("type")),
+        "attempts": attempts,
+        "accuracy": correct_count / attempts,
+        "sessions_seen_in": len(session_ids),
+        "again_ratings": sum(1 for row in rows if row.get("fsrs_rating") == 1),
+        "last_attempted": rows[-1].get("created_at"),
+    }
+
+
+async def generate_session_feedback(
+    session_row: dict,
+    user_id: str,
+    timeout_seconds: float = SESSION_FEEDBACK_TIMEOUT_SECONDS,
+) -> dict[str, str] | None:
+    if not settings.AI_ENABLED or not settings.GEMINI_API_KEY:
+        return None
+
+    session_id = session_row.get("id")
+    topic_id = session_row.get("topic_id")
+
+    review_logs_res = (
+        supabase_db.table("review_logs")
+        .select("session_id,question_id,correct,response_time,fsrs_rating,created_at")
+        .eq("user_id", user_id)
+        .eq("session_id", session_id)
+        .order("created_at")
+        .execute()
+    )
+    review_logs = review_logs_res.data or []
+
+    theta_row = None
+    if topic_id is not None:
+        theta_res = (
+            supabase_db.table("user_topic_theta")
+            .select("theta,posterior_sd,n_responses,is_calibrated,last_updated")
+            .eq("user_id", user_id)
+            .eq("topic_id", topic_id)
+            .execute()
+        )
+        theta_row = theta_res.data[0] if theta_res.data else None
+
+    history_rows = []
+    history_query_builder = (
+        supabase_db.table("sessions")
+        .select("id,topic_id,started_at,ended_at,final_theta,questions_answered,termination_reason")
+        .eq("user_id", user_id)
+        .order("started_at", desc=True)
+        .limit(20)
+    )
+    if topic_id is not None:
+        history_query_builder = history_query_builder.eq("topic_id", topic_id)
+
+    history_query = history_query_builder.execute()
+    for row in (history_query.data or []):
+        if row.get("id") == session_id:
+            continue
+        history_rows.append(row)
+        if len(history_rows) >= SESSION_FEEDBACK_MAX_HISTORY_SESSIONS:
+            break
+
+    weak_questions: list[dict] = []
+    if topic_id is not None:
+        topic_logs_res = (
+            supabase_db.table("review_logs")
+            .select("question_id,session_id,correct,fsrs_rating,created_at")
+            .eq("user_id", user_id)
+            .eq("topic_id", topic_id)
+            .order("created_at")
+            .execute()
+        )
+        topic_logs = topic_logs_res.data or []
+        grouped_logs: dict[int, list[dict]] = {}
+        for row in topic_logs:
+            question_id = row.get("question_id")
+            if question_id is None:
+                continue
+            grouped_logs.setdefault(int(question_id), []).append(row)
+
+        question_ids = list(grouped_logs.keys())
+        question_lookup: dict[int, dict] = {}
+        if question_ids:
+            questions_res = (
+                supabase_db.table("questions")
+                .select("id,text,type")
+                .in_("id", question_ids)
+                .execute()
+            )
+            question_lookup = {
+                int(row["id"]): row
+                for row in (questions_res.data or [])
+                if row.get("id") is not None
+            }
+
+        for question_id, rows in grouped_logs.items():
+            attempts = len(rows)
+            if attempts < 2:
+                continue
+            correct_count = sum(1 for row in rows if bool(row.get("correct")))
+            accuracy = correct_count / attempts if attempts else 0.0
+            if accuracy >= 0.5:
+                continue
+            stats = _format_weak_question_stats(question_id, rows, question_lookup)
+            if stats:
+                weak_questions.append(stats)
+
+        weak_questions.sort(key=lambda row: (row["accuracy"], row["attempts"], row["sessions_seen_in"]))
+
+    context = _build_session_feedback_context(
+        session_row=session_row,
+        review_logs=review_logs,
+        history_rows=history_rows,
+        weak_questions=weak_questions,
+        theta_row=theta_row,
+    )
+
+    prompt = SESSION_FEEDBACK_PROMPT_TEMPLATE.format(**context)
+
+    try:
+        response = await asyncio.wait_for(
+            run_with_retries(
+                lambda: client.models.generate_content(
+                    model=MODEL,
+                    contents=[prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.4,
+                        thinking_config=types.ThinkingConfig(thinking_level="low"),
+                    ),
+                ),
+                "session_feedback_generate",
+            ),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError("AI session feedback generation timed out") from exc
+
+    raw = str(getattr(response, "text", "") or "").strip()
+    cleaned = _strip_json_fence(raw)
+    parsed = json.loads(cleaned)
+
+    if not isinstance(parsed, dict):
+        raise ValueError("AI did not return a JSON object")
+
+    feedback = {
+        "headline": _safe_text(parsed.get("headline")),
+        "strengths": _safe_text(parsed.get("strengths")),
+        "weaknesses": _safe_text(parsed.get("weaknesses")),
+        "trend": _safe_text(parsed.get("trend")),
+        "action": _safe_text(parsed.get("action")),
+    }
+
+    if not all(feedback.values()):
+        raise ValueError("AI session feedback JSON missing required fields")
+
+    return feedback
+
+
+async def generate_open_feedback(
+    question_text: str,
+    model_answer: str,
+    student_answer: str,
+    timeout_seconds: float = 10.0,
+) -> dict[str, str]:
+    prompt = build_open_feedback_prompt(
+        question=question_text,
+        model_answer=model_answer,
+        student_answer=student_answer,
+    )
+
+    try:
+        response = await asyncio.wait_for(
+            run_with_retries(
+                lambda: client.models.generate_content(
+                    model=MODEL,
+                    contents=[prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.4,
+                        thinking_config=types.ThinkingConfig(thinking_level="low"),
+                    ),
+                ),
+                "open_feedback_generate",
+            ),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError("AI feedback generation timed out") from exc
+
+    raw = str(getattr(response, "text", "") or "").strip()
+    cleaned = _strip_json_fence(raw)
+    parsed = json.loads(cleaned)
+
+    if not isinstance(parsed, dict):
+        raise ValueError("AI did not return a JSON object")
+
+    def _to_text(key: str) -> str:
+        value = parsed.get(key)
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    feedback = {
+        "strengths": _to_text("strengths"),
+        "gaps": _to_text("gaps"),
+        "hint": _to_text("hint"),
+        "encouragement": _to_text("encouragement"),
+    }
+
+    if not all(feedback.values()):
+        raise ValueError("AI feedback JSON missing required fields")
+
+    return feedback
 
 
 async def generate_chat_reply(
@@ -893,11 +1303,29 @@ async def generate_chat_reply(
     Generates a conversational reply in the context of a specific question.
     Maintains full conversation history for coherent multi-turn dialogue.
     """
+    open_feedback = user_answer.get("open_feedback") if isinstance(user_answer, dict) else None
+    feedback_context = ""
+    if isinstance(open_feedback, dict):
+        strengths = str(open_feedback.get("strengths") or "").strip()
+        gaps = str(open_feedback.get("gaps") or "").strip()
+        hint = str(open_feedback.get("hint") or "").strip()
+        encouragement = str(open_feedback.get("encouragement") or "").strip()
+
+        if strengths or gaps or hint or encouragement:
+            feedback_context = (
+                "  Feedback given to student:\n"
+                f"    strengths: {strengths}\n"
+                f"    gaps: {gaps}\n"
+                f"    hint: {hint}\n"
+                f"    encouragement: {encouragement}"
+            )
+
     system_prompt = CHAT_SYSTEM_PROMPT.format(
         question_text=question.get("text", ""),
         correct_answer=format_correct_answer_for_prompt(question),
         user_answer=format_user_answer(question, user_answer),
         ability_description=ability_description(theta),
+        feedback_context=feedback_context,
     )
 
     # Build alternating turn prompt 
