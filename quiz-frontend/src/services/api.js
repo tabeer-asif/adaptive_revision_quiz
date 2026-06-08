@@ -67,3 +67,14 @@ export async function getAnalyticsQuestionPerformance(params = {}) {
   const suffix = search.toString() ? `?${search.toString()}` : "";
   return apiGet(`/analytics/question-performance${suffix}`);
 }
+
+export async function getSessionHistory(params = {}) {
+  const search = new URLSearchParams();
+  if (params.limit) search.set("limit", String(params.limit));
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return apiGet(`/sessions/history${suffix}`);
+}
+
+export async function getSessionAnswers(sessionId) {
+  return apiGet(`/sessions/${sessionId}/answers`);
+}

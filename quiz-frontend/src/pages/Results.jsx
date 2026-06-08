@@ -1,6 +1,6 @@
 // src/pages/Results.jsx
 import { useLocation, useNavigate } from "react-router-dom";
-import { Box, Card, CardContent, Typography, Button, LinearProgress } from "@mui/material";
+import { Box, Card, CardContent, Typography, Button, LinearProgress, Stack, Divider } from "@mui/material";
 
 function Results() {
   const location = useLocation();
@@ -9,6 +9,7 @@ function Results() {
   const score = location.state?.score || 0;
   const total = Math.max(0, Number(location.state?.total ?? 0));
   const exitedEarly = Boolean(location.state?.exitedEarly);
+  const feedback = location.state?.feedback || null;
 
   const percentage = total > 0 ? Math.round((score / total) * 100) : 0;
 
@@ -48,6 +49,46 @@ function Results() {
             {percentage}% Accuracy
           </Typography>
 
+          {feedback && (
+            <Card variant="outlined" sx={{ mb: 3, borderRadius: 2, backgroundColor: "rgba(25, 118, 210, 0.04)" }}>
+              <CardContent>
+                <Stack spacing={1.25}>
+                  <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                    Session feedback
+                  </Typography>
+                  {feedback.headline && (
+                    <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                      {feedback.headline}
+                    </Typography>
+                  )}
+                  {feedback.strengths && (
+                    <Typography variant="body2">
+                      <strong>Strengths:</strong> {feedback.strengths}
+                    </Typography>
+                  )}
+                  {feedback.weaknesses && (
+                    <Typography variant="body2">
+                      <strong>Needs work:</strong> {feedback.weaknesses}
+                    </Typography>
+                  )}
+                  {feedback.trend && (
+                    <Typography variant="body2">
+                      <strong>Trend:</strong> {feedback.trend}
+                    </Typography>
+                  )}
+                  {feedback.action && (
+                    <>
+                      <Divider />
+                      <Typography variant="body2">
+                        <strong>Next step:</strong> {feedback.action}
+                      </Typography>
+                    </>
+                  )}
+                </Stack>
+              </CardContent>
+            </Card>
+          )}
+
           {/* ✅ General Feedback message */}
           <Typography align="center" sx={{ mt: 2, mb: 3 }}>
             {total === 0
@@ -67,15 +108,6 @@ function Results() {
             onClick={() => navigate("/quiz")}
           >
             Try Again
-          </Button>
-
-          <Button
-            variant="outlined"
-            fullWidth
-            sx={{ mb: 2 }}
-            onClick={() => navigate(-1)}
-          >
-            Back
           </Button>
 
           <Button

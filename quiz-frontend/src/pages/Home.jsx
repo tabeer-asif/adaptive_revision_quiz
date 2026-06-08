@@ -152,6 +152,15 @@ function Home() {
 
           <Button
             variant="outlined"
+            fullWidth
+            sx={{ mb: 2, height: 45 }}
+            onClick={() => navigate("/sessions")}
+          >
+            View Past Sessions
+          </Button>
+
+          <Button
+            variant="outlined"
             color="error"
             fullWidth
             sx={{ height: 45 }}

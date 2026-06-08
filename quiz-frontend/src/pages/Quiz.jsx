@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Box,
   Card,
@@ -28,6 +28,7 @@ import MathText from "../components/MathText";
 
 const API_URL = process.env.REACT_APP_API_URL;
 const SUPPORTED_TYPES = ["MCQ", "MULTI_MCQ", "NUMERIC", "SHORT", "OPEN"];
+const OPEN_MIN_ANSWER_LENGTH = 20;
 function formatDifficultyChipLabel(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return `Difficulty: ${Math.min(5, Math.max(1, Math.round(value)))}`;
@@ -49,6 +50,10 @@ function Quiz() {
   const [startTime, setStartTime] = useState(null);
   const [dueQuestionsRemaining, setDueQuestionsRemaining] = useState(0);
   const [correctAnswer, setCorrectAnswer] = useState("");
+  const [openFeedbackData, setOpenFeedbackData] = useState(null);
+  const [openFeedbackLoading, setOpenFeedbackLoading] = useState(false);
+  const [openSelfMarkLoading, setOpenSelfMarkLoading] = useState(false);
+  const [openFeedbackError, setOpenFeedbackError] = useState("");
   const [awaitingOpenRating, setAwaitingOpenRating] = useState(false);
   const [openResponseTimeSeconds, setOpenResponseTimeSeconds] = useState(null);
   const [submittingRating, setSubmittingRating] = useState(false);
@@ -59,11 +64,116 @@ function Quiz() {
   const [chatOpen, setChatOpen] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
 
+  const sessionIdRef = useRef(null);
+  const sessionStartPromiseRef = useRef(null);
+  const lastThetaRef = useRef(null);
+  const sessionEndedRef = useRef(false);
+  const sessionCloseRequestedRef = useRef(false);
+  const sessionCloseReasonRef = useRef("user_quit");
+  const sessionLifecycleBoundRef = useRef(false);
+
   const navigate = useNavigate();
   const location = useLocation();
 
   const token = localStorage.getItem("token");
   const topics = location.state?.topics;
+  const sessionTopicId = Array.isArray(topics) && topics.length === 1 ? topics[0] : null;
+  const sessionTopicIds = useMemo(
+    () => (Array.isArray(topics)
+      ? topics
+          .map((id) => Number(id))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      : []),
+    [topics]
+  );
+
+  const endSession = useCallback(async (terminationReason) => {
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId || sessionEndedRef.current) return null;
+
+    sessionEndedRef.current = true;
+    try {
+      const payload = {
+        termination_reason: terminationReason,
+      };
+
+      if (typeof lastThetaRef.current === "number") {
+        payload.final_theta = lastThetaRef.current;
+      }
+
+      const res = await fetch(`${API_URL}/sessions/${activeSessionId}/end`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || "Failed to end session");
+      }
+
+      const data = await res.json();
+      return data;
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
+  }, [token]);
+
+  const startSession = useCallback(async () => {
+    if (sessionIdRef.current) return sessionIdRef.current;
+    if (sessionStartPromiseRef.current) return sessionStartPromiseRef.current;
+
+    const startPromise = (async () => {
+      try {
+        const res = await fetch(`${API_URL}/sessions/start`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            topic_id: sessionTopicId,
+            topic_ids: sessionTopicIds.length > 0 ? sessionTopicIds : undefined,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || "Failed to start session");
+        }
+
+        sessionIdRef.current = data.id;
+        sessionEndedRef.current = false;
+
+        if (sessionCloseRequestedRef.current) {
+          void endSession(sessionCloseReasonRef.current);
+        }
+
+        return data.id;
+      } catch (err) {
+        console.error(err);
+        return null;
+      } finally {
+        sessionStartPromiseRef.current = null;
+      }
+    })();
+
+    sessionStartPromiseRef.current = startPromise;
+    return startPromise;
+  }, [endSession, sessionTopicId, sessionTopicIds, token]);
+
+  const requestSessionClose = useCallback((reason) => {
+    sessionCloseRequestedRef.current = true;
+    sessionCloseReasonRef.current = reason;
+
+    if (sessionIdRef.current) {
+      void endSession(reason);
+    }
+  }, [endSession]);
 
   const getDueCount = useCallback(async () => {
     const res = await fetch(`${API_URL}/questions/due/count`, {
@@ -117,6 +227,9 @@ function Quiz() {
       setSelectedAnswers([]);
       setFeedback("");
       setCorrectAnswer("");
+      setOpenFeedbackData(null);
+      setOpenFeedbackLoading(false);
+      setOpenFeedbackError("");
       setAwaitingOpenRating(false);
       setOpenResponseTimeSeconds(null);
       setSubmittingRating(false);
@@ -149,13 +262,18 @@ function Quiz() {
     }
   }, [getDueCount]);
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
+    if (sessionLifecycleBoundRef.current) return undefined;
+    sessionLifecycleBoundRef.current = true;
+
     const initializeQuiz = async () => {
       if (!token) {
         navigate("/login");
         return;
       }
 
+      await startSession();
       await hasDueQuestionsRemaining();
 
       const hasQuestion = await fetchNextQuestion();
@@ -165,7 +283,13 @@ function Quiz() {
     };
 
     initializeQuiz();
-  }, [fetchNextQuestion, hasDueQuestionsRemaining, navigate, token]);
+    return () => {
+      requestSessionClose("user_quit");
+    };
+    // The session lifecycle should be bound once per page mount.
+    // Re-running this effect can trigger premature cleanup/end calls.
+  }, []);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   const buildAnswer = () => {
     const type = currentQuestion?.type;
@@ -186,10 +310,14 @@ function Quiz() {
       if (!String(selectedOption).trim()) return true;
       return !Number.isFinite(Number(selectedOption));
     }
+    if (type === "OPEN") {
+      return String(selectedOption || "").trim().length < OPEN_MIN_ANSWER_LENGTH;
+    }
     return !selectedOption || !String(selectedOption).trim();
   };
 
-  const isInputLocked = !!feedback || awaitingOpenRating;
+  const isInputLocked = !!feedback || awaitingOpenRating || openFeedbackLoading || openSelfMarkLoading;
+  const openAnswerLoading = openFeedbackLoading || openSelfMarkLoading;
 
   const renderAnswerInput = () => {
     const type = currentQuestion.type;
@@ -289,40 +417,7 @@ function Quiz() {
     const responseTimeSeconds = responseTime / 1000;
 
     if (currentQuestion?.type === "OPEN") {
-      try {
-        const res = await fetch(`${API_URL}/quiz/submit-answer`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({
-            question_id: currentQuestion.id,
-            selected_option: payloadAnswer,
-            response_time: responseTimeSeconds,
-          }),
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.detail || "Failed to submit answer");
-        }
-
-        if (data.requires_self_rating) {
-          setCorrectAnswer(data.correct_answer || "");
-          setAwaitingOpenRating(true);
-          setOpenResponseTimeSeconds(responseTimeSeconds);
-          setLastSubmit({ answer: payloadAnswer, responseTime: responseTimeSeconds });
-          return;
-        }
-
-        if (data.correct) {
-          setScore((prev) => prev + 1);
-        }
-        setCorrectAnswer(data.correct_answer || "");
-        setFeedback(data.correct ? "✅ Correct!" : "❌ Wrong!");
-        setLastSubmit({ answer: payloadAnswer, responseTime: responseTimeSeconds });
-      } catch (err) {
-        console.error(err);
-        setFeedback(err instanceof Error ? err.message : "Error submitting answer.");
-      }
+      await handlePersonalisedFeedback(payloadAnswer, responseTimeSeconds);
       return;
     }
 
@@ -334,12 +429,17 @@ function Quiz() {
           question_id: currentQuestion.id,
           selected_option: payloadAnswer,
           response_time: responseTimeSeconds,
+          session_id: sessionIdRef.current,
         }),
       });
 
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.detail || "Failed to submit answer");
+      }
+
+      if (typeof data.theta_after === "number") {
+        lastThetaRef.current = data.theta_after;
       }
 
       if (data.correct) {
@@ -351,6 +451,101 @@ function Quiz() {
     } catch (err) {
       console.error(err);
       setFeedback(err instanceof Error ? err.message : "Error submitting answer.");
+    }
+  };
+
+  const handlePersonalisedFeedback = async (payloadAnswerArg = null, responseTimeSecondsArg = null) => {
+    if (!currentQuestion || currentQuestion.type !== "OPEN") return;
+
+    const payloadAnswer = payloadAnswerArg ?? buildAnswer();
+    const responseTimeSeconds = responseTimeSecondsArg ?? ((Date.now() - startTime) / 1000);
+
+    if (payloadAnswer == null) {
+      setFeedback("Unsupported or invalid answer format.");
+      return;
+    }
+
+    setOpenFeedbackLoading(true);
+    setOpenFeedbackError("");
+    try {
+      const res = await fetch(`${API_URL}/feedback/open`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          question_id: currentQuestion.id,
+          student_answer: String(payloadAnswer),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Could not generate feedback. Please try again.");
+      }
+
+      setOpenFeedbackData({
+        strengths: data.strengths,
+        gaps: data.gaps,
+        hint: data.hint,
+        encouragement: data.encouragement,
+      });
+      setCorrectAnswer(data.model_answer || "");
+      setFeedback("");
+      setAwaitingOpenRating(true);
+      setOpenResponseTimeSeconds(responseTimeSeconds);
+      setLastSubmit({ answer: payloadAnswer, responseTime: responseTimeSeconds });
+    } catch (err) {
+      console.error(err);
+      setOpenFeedbackError(err instanceof Error ? err.message : "Could not generate feedback. Please try again.");
+    } finally {
+      setOpenFeedbackLoading(false);
+    }
+  };
+
+  const handleSelfMark = async () => {
+    if (!currentQuestion || currentQuestion.type !== "OPEN") return;
+
+    const payloadAnswer = buildAnswer();
+    if (payloadAnswer == null) {
+      setFeedback("Unsupported or invalid answer format.");
+      return;
+    }
+
+    const responseTimeSeconds = (Date.now() - startTime) / 1000;
+
+    setOpenSelfMarkLoading(true);
+    setOpenFeedbackError("");
+    setOpenFeedbackData(null);
+    try {
+      const res = await fetch(`${API_URL}/quiz/submit-answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          question_id: currentQuestion.id,
+          selected_option: String(payloadAnswer),
+          response_time: responseTimeSeconds,
+          session_id: sessionIdRef.current,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to submit answer");
+      }
+
+      if (typeof data.theta_after === "number") {
+        lastThetaRef.current = data.theta_after;
+      }
+
+      setCorrectAnswer(data.correct_answer || "");
+      setFeedback("");
+      setAwaitingOpenRating(true);
+      setOpenResponseTimeSeconds(responseTimeSeconds);
+      setLastSubmit({ answer: payloadAnswer, responseTime: responseTimeSeconds });
+    } catch (err) {
+      console.error(err);
+      setFeedback(err instanceof Error ? err.message : "Error submitting answer.");
+    } finally {
+      setOpenSelfMarkLoading(false);
     }
   };
 
@@ -373,12 +568,17 @@ function Quiz() {
           selected_option: payloadAnswer,
           response_time: openResponseTimeSeconds,
           self_rating: rating,
+          session_id: sessionIdRef.current,
         }),
       });
 
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.detail || "Failed to submit answer");
+      }
+
+      if (typeof data.theta_after === "number") {
+        lastThetaRef.current = data.theta_after;
       }
 
       if (data.correct) {
@@ -403,6 +603,10 @@ function Quiz() {
     setSelectedAnswers([]);
     setFeedback("");
     setCorrectAnswer("");
+    setOpenFeedbackData(null);
+    setOpenFeedbackLoading(false);
+    setOpenSelfMarkLoading(false);
+    setOpenFeedbackError("");
     setAwaitingOpenRating(false);
     setOpenResponseTimeSeconds(null);
     setSubmittingRating(false);
@@ -419,7 +623,16 @@ function Quiz() {
 
     const hasNextQuestion = await fetchNextQuestion();
     if (!hasNextQuestion) {
-      navigate("/results", { state: { score, total: answeredCount } });
+      const endedSession = await endSession("max_questions");
+      const backendAnswered = Number(endedSession?.questions_answered);
+      const total = Number.isFinite(backendAnswered) ? backendAnswered : answeredCount;
+      navigate("/results", {
+        state: {
+          score,
+          total,
+          feedback: endedSession?.feedback ?? null,
+        },
+      });
     }
   };
 
@@ -427,13 +640,18 @@ function Quiz() {
     setExitDialogOpen(true);
   };
 
-  const confirmExitQuiz = () => {
+  const confirmExitQuiz = async () => {
+    requestSessionClose("user_quit");
+    const endedSession = await endSession("user_quit");
+    const backendAnswered = Number(endedSession?.questions_answered);
+    const total = Number.isFinite(backendAnswered) ? backendAnswered : questionCount;
     setExitDialogOpen(false);
     navigate("/results", {
       state: {
         score,
-        total: questionCount,
+        total,
         exitedEarly: true,
+        feedback: endedSession?.feedback ?? null,
       },
     });
   };
@@ -499,6 +717,9 @@ function Quiz() {
   }
 
   const progress = (feedback || awaitingOpenRating) ? 100 : 0;
+    const openAnswerLength = String(selectedOption || "").trim().length;
+    const openRemainingChars = Math.max(0, OPEN_MIN_ANSWER_LENGTH - openAnswerLength);
+
   const feedbackSeverity = feedback.includes("Correct")
     ? "success"
     : feedback.includes("Wrong") || feedback.toLowerCase().includes("error") || feedback.toLowerCase().includes("failed")
@@ -528,12 +749,6 @@ function Quiz() {
           <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mb: 1 }}>
             <Button variant="outlined" color="warning" size="small" onClick={handleExitQuiz}>
               Exit Quiz
-            </Button>
-            <Button variant="outlined" size="small" onClick={() => navigate(-1)}>
-              Back
-            </Button>
-            <Button variant="outlined" size="small" onClick={() => navigate("/home")}>
-              Home
             </Button>
           </Box>
 
@@ -576,18 +791,46 @@ function Quiz() {
 
           {renderAnswerInput()}
 
-          {!feedback ? (
+          {currentQuestion.type === "OPEN" && !openFeedbackData && !feedback && !awaitingOpenRating && (
+            <Typography variant="caption" sx={{ mt: 1, display: "block", color: openRemainingChars > 0 ? "text.secondary" : "success.main" }}>
+              {openRemainingChars > 0
+                ? `Minimum ${openRemainingChars} more characters`
+                : "Ready to submit for feedback"}
+            </Typography>
+          )}
+
+          {currentQuestion.type === "OPEN" && !feedback && !openFeedbackData && !awaitingOpenRating ? (
+            <Box sx={{ display: "flex", gap: 1, mt: 2, flexDirection: { xs: "column", sm: "row" } }}>
+              <Button
+                variant="outlined"
+                fullWidth
+                onClick={handleSelfMark}
+                disabled={isSubmitDisabled() || openAnswerLoading}
+              >
+                {openSelfMarkLoading ? "Saving..." : "Self Mark"}
+              </Button>
+              <Button
+                variant="contained"
+                fullWidth
+                onClick={handlePersonalisedFeedback}
+                disabled={isSubmitDisabled() || openAnswerLoading}
+              >
+                {openFeedbackLoading ? "Getting feedback..." : "Want personalised feedback"}
+              </Button>
+            </Box>
+          ) : !feedback && !openFeedbackData && !awaitingOpenRating ? (
             <Button
               variant="contained"
               fullWidth
               sx={{ mt: 2 }}
               onClick={handleSubmit}
-              disabled={isSubmitDisabled() || awaitingOpenRating}
+              disabled={isSubmitDisabled() || awaitingOpenRating || openAnswerLoading}
             >
-              Submit
+              {openFeedbackLoading ? "Getting feedback..." : "Submit"}
             </Button>
           ) : (
-            <>
+            feedback && (
+              <>
               <Alert
                 severity={feedbackSeverity}
                 sx={{ mt: 2 }}
@@ -613,7 +856,34 @@ function Quiz() {
                   {explanationLoading ? "Loading…" : "Explain this"}
                 </Button>
               </Box>
-            </>
+              </>
+            )
+          )}
+
+          {openFeedbackError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {openFeedbackError}
+            </Alert>
+          )}
+
+          {openFeedbackData && (
+            <Paper elevation={2} sx={{ mt: 2, p: 2, borderRadius: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                AI feedback
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                <strong>What you did well:</strong> {openFeedbackData.strengths}
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                <strong>What to improve:</strong> {openFeedbackData.gaps}
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                <strong>Hint:</strong> {openFeedbackData.hint}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {openFeedbackData.encouragement}
+              </Typography>
+            </Paper>
           )}
 
           {correctAnswer && (
@@ -696,7 +966,18 @@ function Quiz() {
         open={chatOpen}
         onClose={() => setChatOpen(false)}
         question={currentQuestion}
-        userAnswer={lastSubmit ? { selected_option: lastSubmit.answer, self_rating: lastSubmit.selfRating ?? null } : {}}
+        userAnswer={lastSubmit ? {
+          selected_option: lastSubmit.answer,
+          self_rating: lastSubmit.selfRating ?? null,
+          open_feedback: currentQuestion?.type === "OPEN" && openFeedbackData
+            ? {
+                strengths: openFeedbackData.strengths,
+                gaps: openFeedbackData.gaps,
+                hint: openFeedbackData.hint,
+                encouragement: openFeedbackData.encouragement,
+              }
+            : null,
+        } : {}}
         topicId={currentQuestion?.topic_id}
         initialExplanation={explanationData?.explanation ?? null}
       />
