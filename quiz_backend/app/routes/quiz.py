@@ -60,6 +60,23 @@ def format_correct_answer(question_type, db_answer, options):
 
     return "" if db_answer is None else str(db_answer)
 
+
+def _increment_session_attempt_count(session_id: int, user_id: str):
+    session_resp = (
+        supabase_db.table("sessions")
+        .select("questions_answered")
+        .eq("id", session_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not session_resp.data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    questions_answered = int(session_resp.data[0].get("questions_answered") or 0) + 1
+    supabase_db.table("sessions").update({
+        "questions_answered": questions_answered,
+    }).eq("id", session_id).eq("user_id", user_id).execute()
+
 @router.post("/submit-answer")
 def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
     """
@@ -77,6 +94,17 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
     submitted_text = selected_option if isinstance(selected_option, str) else ""
     score = 0.0
     correct = False
+
+    if request.session_id is not None:
+        session_check = (
+            supabase_db.table("sessions")
+            .select("id")
+            .eq("id", request.session_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if not session_check.data:
+            raise HTTPException(status_code=404, detail="Session not found")
 
 
     # -----------------------------
@@ -235,7 +263,7 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
         "user_id": user_id,
         "question_id": question_id,
         "topic_id": topic_id,
-        #session_id: request.session_id if you have sessions implemented
+        "session_id": request.session_id,
         "selected_option": submitted_text if question_type in ["SHORT", "OPEN"] else selected_option,
         "correct": correct,
         "response_time": response_time,
@@ -250,6 +278,16 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
         "fsrs_state": card.state.value,
         "created_at": datetime.now(timezone.utc).isoformat()
     }).execute()
+
+    # Only count fully committed answers.
+    # OPEN questions have a two-phase flow: first submit returns requires_self_rating=True
+    # and does not yet produce a final answer; the second submit (with self_rating) does.
+    # We must not increment on the first phase to avoid double-counting.
+    _answer_is_committed = not (
+        question_type == "OPEN" and self_rating is None
+    )
+    if request.session_id is not None and _answer_is_committed:
+        _increment_session_attempt_count(request.session_id, user_id)
 
     supabase_db.table("user_topic_theta").upsert({
         "user_id": user_id,
@@ -285,6 +323,7 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
         "correct": correct,
         "next_review": card.due.isoformat(),
         "correct_answer": correct_answer,
+        "theta_after": theta_new,
     }
 
 
