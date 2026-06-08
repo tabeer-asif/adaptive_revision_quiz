@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["python311"]
+
+[phases.install]
+cmds = [
+  "pip install --upgrade pip",
+  "pip install -r requirements.txt",
+  # Pre-download the NLTK stopwords corpus during build so it is already
+  # present at runtime and the first request is not delayed by a network fetch.
+  "python -c \"import nltk; nltk.download('stopwords', quiet=True)\""
+]
+
+[start]
+cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"

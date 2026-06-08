@@ -13,11 +13,12 @@ from nltk.corpus import stopwords
 
 logger = logging.getLogger(__name__)
 
-# Download stopwords corpus on first import (cached after first run)
+# Corpus is pre-downloaded during the build step (nixpacks.toml).
+# Fallback download covers local dev environments that lack the data.
 try:
     stopwords.words('english')
 except LookupError:
-    nltk.download('stopwords')
+    nltk.download('stopwords', quiet=True)
 
 STOP_WORDS_EN = set(stopwords.words('english'))
 
