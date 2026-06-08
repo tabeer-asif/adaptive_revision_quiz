@@ -16,9 +16,16 @@ from app.supabase_client import supabase_db
 
 logger = logging.getLogger(__name__)
 
-# ── Initialise client once ──────────────────────────────────────────
-client = genai.Client(api_key=settings.GEMINI_API_KEY)
-MODEL = "gemini-3.5-flash"   # ← updated model
+# ── Initialise client lazily so import succeeds without an API key ──
+_client: "genai.Client | None" = None
+MODEL = "gemini-3.5-flash"
+
+
+def _get_client() -> "genai.Client":
+    global _client
+    if _client is None:
+        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    return _client
 
 
 # ── Supported file types ────────────────────────────────────────────
@@ -212,7 +219,7 @@ def get_cached_uri(file_bytes: bytes) -> dict | None:
         file_uri_cache.pop(key, None)
         if stale_name:
             try:
-                client.files.delete(name=stale_name)
+                _get_client().files.delete(name=stale_name)
                 logger.info("gemini_cached_file_deleted_on_expiry name=%s", stale_name)
             except Exception:
                 pass
@@ -269,7 +276,7 @@ async def wait_for_file_ready(uploaded_file, *, operation_prefix: str = "file"):
         logger.info("gemini_%s_processing name=%s", operation_prefix, uploaded_file.name)
         await asyncio.sleep(1)
         uploaded_file = await run_with_retries(
-            lambda: client.files.get(name=uploaded_file.name),
+            lambda: _get_client().files.get(name=uploaded_file.name),
             f"{operation_prefix}_get",
         )
 
@@ -300,7 +307,7 @@ async def generate_from_uri(
     thinking_level = DIFFICULTY_TO_THINKING_LEVEL.get(difficulty, "medium")
 
     response = await run_with_retries(
-        lambda: client.models.generate_content(
+        lambda: _get_client().models.generate_content(
             model=MODEL,
             contents=[
                 types.Part.from_uri(
@@ -367,7 +374,7 @@ async def generate_all_questions(
             tmp_path = tmp.name
 
         uploaded_file = await run_with_retries(
-            lambda: client.files.upload(
+            lambda: _get_client().files.upload(
                 file=tmp_path,
                 config=types.UploadFileConfig(
                     mime_type=mime_type,
@@ -405,7 +412,7 @@ async def generate_all_questions(
         if uploaded_file_name and not used_cached_uri:
             invalidate_cache(file_bytes)
             try:
-                await asyncio.to_thread(client.files.delete, name=uploaded_file_name)
+                await asyncio.to_thread(_get_client().files.delete, name=uploaded_file_name)
                 logger.info("gemini_file_deleted name=%s", uploaded_file_name)
             except Exception:
                 pass
@@ -474,7 +481,7 @@ async def score_document_feasibility(
             tmp_path = tmp.name
 
         uploaded_file = await run_with_retries(
-            lambda: client.files.upload(
+            lambda: _get_client().files.upload(
                 file=tmp_path,
                 config=types.UploadFileConfig(mime_type=mime_type, display_name=filename),
             ),
@@ -487,7 +494,7 @@ async def score_document_feasibility(
 
     try:
         response = await run_with_retries(
-            lambda: client.models.generate_content(
+            lambda: _get_client().models.generate_content(
                 model=MODEL,
                 contents=[
                     types.Part.from_uri(file_uri=file_uri, mime_type=mime_type),
@@ -555,7 +562,7 @@ async def suggest_topics_from_questions(
 
     try:
         response = await run_with_retries(
-            lambda: client.models.generate_content(
+            lambda: _get_client().models.generate_content(
                 model=MODEL,
                 contents=[prompt],
                 config=types.GenerateContentConfig(
@@ -674,7 +681,7 @@ async def suggest_new_topic_names(
 
     try:
         response = await run_with_retries(
-            lambda: client.models.generate_content(
+            lambda: _get_client().models.generate_content(
                 model=MODEL,
                 contents=[prompt],
                 config=types.GenerateContentConfig(
@@ -848,7 +855,7 @@ async def generate_explanation(
     )
 
     response = await run_with_retries(
-        lambda: client.models.generate_content(
+        lambda: _get_client().models.generate_content(
             model=MODEL,
             contents=[prompt],
             config=types.GenerateContentConfig(
@@ -1198,7 +1205,7 @@ async def generate_session_feedback(
     try:
         response = await asyncio.wait_for(
             run_with_retries(
-                lambda: client.models.generate_content(
+                lambda: _get_client().models.generate_content(
                     model=MODEL,
                     contents=[prompt],
                     config=types.GenerateContentConfig(
@@ -1250,7 +1257,7 @@ async def generate_open_feedback(
     try:
         response = await asyncio.wait_for(
             run_with_retries(
-                lambda: client.models.generate_content(
+                lambda: _get_client().models.generate_content(
                     model=MODEL,
                     contents=[prompt],
                     config=types.GenerateContentConfig(
@@ -1341,7 +1348,7 @@ async def generate_chat_reply(
     full_prompt = "\n\n".join(parts)
 
     response = await run_with_retries(
-        lambda: client.models.generate_content(
+        lambda: _get_client().models.generate_content(
             model=MODEL,
             contents=[full_prompt],
             config=types.GenerateContentConfig(
