@@ -13,6 +13,7 @@ from app.config import settings
 import asyncio
 import logging
 from app.supabase_client import supabase_db
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,11 @@ Bloom taxonomy intent for this type:
 {bloom_guidance}
 
 IMPORTANT:
-- Base questions ONLY on content found in the document
+- Base questions ONLY on substantive content found in the document (concepts, facts, processes, principles, calculations)
 - Do not invent facts not present in the material
-- Vary which parts of the document you draw from
+- Spread questions across different sections and topics of the document — do NOT draw all questions from the same passage or page. Cover early, middle, and late portions of the material.
+- Each question must test a DIFFERENT concept, fact, or skill — do NOT ask two questions that are essentially the same topic rephrased at different difficulty levels
+- Do NOT ask about document metadata: never ask who wrote or authored the document, what the course code or course name is, what institution it belongs to, what year it was published, or anything else that is administrative/bibliographic rather than educational content
 - Match the difficulty level strictly
 - Write question text as standalone, self contained questions - do NOT use phrases like "according to the document", "based on the material", "from the study material", "in the text", "as mentioned", or any reference to a document/material/resource. The student will not have access to the source material during the quiz.
 - For any mathematical expressions, formulas, symbols or units use LaTeX delimiters: \\(...\\) for inline math, \\[...\\] for display/block equations
@@ -107,7 +110,11 @@ TYPE_RULES = {
 """,
     "SHORT": """
 - answer is a concise string (1-5 words ideally)
-- keywords: array of 1-5 concise, relevant key terms (avoid filler words)
+- keywords: array of 3-8 accepted answer aliases only
+- Every keyword must be a response that should be marked correct on its own
+- Include the exact answer, spelling/spacing/hyphenation variants, abbreviations, and full synonyms only if they are fully acceptable answers
+- Include a single-word alias only when that single word alone is sufficient as a correct answer
+- Do NOT include context words, topic words, hints, or incomplete fragments that should not pass on their own
 - options: null
 - tolerance: null
 """,
@@ -318,7 +325,7 @@ async def generate_from_uri(
             ],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
-                temperature=0.4,
+                temperature=1.0,
                 thinking_config=types.ThinkingConfig(thinking_level=thinking_level),
             ),
         ),
@@ -765,10 +772,10 @@ _TYPE_SPECIFIC_CONTEXT = {
 }
 
 _ABILITY_DESCRIPTIONS = [
-    (-1.0, "a beginner (theta < -1.0) who is new to this topic — keep explanations simple and concrete"),
+    (-1.0, "a beginner (theta < -1.0) who is new to this topic - keep explanations simple and concrete"),
     (0.0,  "a developing student (theta -1.0 to 0.0) with some foundational knowledge"),
     (1.0,  "an intermediate student (theta 0.0 to 1.0) with solid foundational knowledge"),
-    (float("inf"), "an advanced student (theta > 1.0) — explanations can assume strong prior knowledge"),
+    (float("inf"), "an advanced student (theta > 1.0) - explanations can assume strong prior knowledge"),
 ]
 
 
@@ -986,7 +993,7 @@ Return only valid JSON with this exact shape:
 
 SESSION_FEEDBACK_MAX_HISTORY_SESSIONS = 5
 SESSION_FEEDBACK_MAX_WEAK_QUESTIONS = 3
-SESSION_FEEDBACK_TIMEOUT_SECONDS = 12.0
+SESSION_FEEDBACK_TIMEOUT_SECONDS = 300  
 
 
 def _safe_text(value: object) -> str:
@@ -1099,8 +1106,6 @@ async def generate_session_feedback(
     user_id: str,
     timeout_seconds: float = SESSION_FEEDBACK_TIMEOUT_SECONDS,
 ) -> dict[str, str] | None:
-    if not settings.AI_ENABLED or not settings.GEMINI_API_KEY:
-        return None
 
     session_id = session_row.get("id")
     topic_id = session_row.get("topic_id")
@@ -1219,6 +1224,7 @@ async def generate_session_feedback(
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError as exc:
+        logger.warning("gemini_session_feedback_timeout session_id=%s elapsed=%.1fs timeout=%.1fs", session_id, elapsed, timeout_seconds)
         raise TimeoutError("AI session feedback generation timed out") from exc
 
     raw = str(getattr(response, "text", "") or "").strip()
@@ -1246,8 +1252,10 @@ async def generate_open_feedback(
     question_text: str,
     model_answer: str,
     student_answer: str,
-    timeout_seconds: float = 10.0,
+    timeout_seconds: float = 30.0,
 ) -> dict[str, str]:
+    start_time = time.time()
+    
     prompt = build_open_feedback_prompt(
         question=question_text,
         model_answer=model_answer,
@@ -1270,7 +1278,11 @@ async def generate_open_feedback(
             ),
             timeout=timeout_seconds,
         )
+        elapsed = time.time() - start_time
+        logger.info("gemini_open_feedback_success elapsed=%.1fs", elapsed)
     except asyncio.TimeoutError as exc:
+        elapsed = time.time() - start_time
+        logger.warning("gemini_open_feedback_timeout elapsed=%.1fs timeout=%.1fs", elapsed, timeout_seconds)
         raise TimeoutError("AI feedback generation timed out") from exc
 
     raw = str(getattr(response, "text", "") or "").strip()

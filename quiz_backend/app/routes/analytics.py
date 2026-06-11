@@ -306,3 +306,46 @@ def get_question_performance(
         "window_days": days,
         "questions": out,
     }
+
+
+@router.get("/fsrs-ratings")
+def get_fsrs_ratings(
+    days: int = Query(default=30, ge=1, le=365),
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+
+    logs = (
+        supabase_db.table("review_logs")
+        .select("fsrs_rating,created_at")
+        .eq("user_id", user_id)
+        .gte("created_at", _iso_utc_days_ago(days))
+        .execute()
+        .data
+        or []
+    )
+
+    rating_counts: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
+    daily_counts: dict[str, int] = defaultdict(int)
+
+    for row in logs:
+        rating = row.get("fsrs_rating")
+        if isinstance(rating, int) and rating in rating_counts:
+            rating_counts[rating] += 1
+        day = _to_day(row.get("created_at"))
+        if day:
+            daily_counts[day] += 1
+
+    return {
+        "window_days": days,
+        "ratings": {
+            "Again": rating_counts[1],
+            "Hard": rating_counts[2],
+            "Good": rating_counts[3],
+            "Easy": rating_counts[4],
+        },
+        "daily_reviews": [
+            {"date": day, "count": daily_counts[day]}
+            for day in sorted(daily_counts)
+        ],
+    }

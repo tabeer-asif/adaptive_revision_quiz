@@ -1,21 +1,3 @@
-// export const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
-
-// export async function getNextQuestion(student_id) {
-//   const res = await fetch(`${API_BASE}/next_question?student_id=${student_id}`);
-//   if (!res.ok) throw new Error("Failed to fetch question");
-//   return res.json();
-// }
-
-// export async function submitAnswer(student_id, question_id, selected) {
-//   const res = await fetch(`${API_BASE}/submit_answer`, {
-//     method: "POST",
-//     headers: { "Content-Type": "application/json" },
-//     body: JSON.stringify({ student_id, question_id, selected }),
-//   });
-//   if (!res.ok) throw new Error("Failed to submit answer");
-//   return res.json();
-// }
-
 // src/services/api.js
 const API_URL = process.env.REACT_APP_API_URL;
 
@@ -66,6 +48,13 @@ export async function getAnalyticsQuestionPerformance(params = {}) {
   if (params.days) search.set("days", String(params.days));
   const suffix = search.toString() ? `?${search.toString()}` : "";
   return apiGet(`/analytics/question-performance${suffix}`);
+}
+
+export async function getAnalyticsFsrsRatings(params = {}) {
+  const search = new URLSearchParams();
+  if (params.days) search.set("days", String(params.days));
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return apiGet(`/analytics/fsrs-ratings${suffix}`);
 }
 
 export async function getSessionHistory(params = {}) {

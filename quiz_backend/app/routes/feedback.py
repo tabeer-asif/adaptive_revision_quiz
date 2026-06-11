@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
 OPEN_MIN_ANSWER_LENGTH = 20
-OPEN_FEEDBACK_TIMEOUT_SECONDS = 10
+OPEN_FEEDBACK_TIMEOUT_SECONDS = 300  
 
 
 def _extract_model_answer(answer_data: object) -> str:
@@ -39,12 +39,15 @@ async def get_open_feedback(body: OpenFeedbackRequest, user=Depends(get_current_
     if not settings.AI_ENABLED or not settings.GEMINI_API_KEY:
         raise HTTPException(status_code=503, detail="AI features are not enabled.")
 
-    student_answer = body.student_answer.strip()
+    student_answer = body.student_answer
+    # Validate minimum answer length (count all characters including spaces)
     if len(student_answer) < OPEN_MIN_ANSWER_LENGTH:
         raise HTTPException(
             status_code=400,
             detail=f"Answer too short to provide meaningful feedback (minimum {OPEN_MIN_ANSWER_LENGTH} characters)",
         )
+    # Trim after validation for processing
+    student_answer = student_answer.strip()
 
     question_res = (
         supabase_db.table("questions")
@@ -72,9 +75,12 @@ async def get_open_feedback(body: OpenFeedbackRequest, user=Depends(get_current_
             student_answer=student_answer,
             timeout_seconds=OPEN_FEEDBACK_TIMEOUT_SECONDS,
         )
+        logger.info("open_feedback_generated question_id=%s", body.question_id)
     except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="AI feedback timed out, please try again") from exc
+        logger.warning("open_feedback_timeout question_id=%s", body.question_id)
+        raise HTTPException(status_code=504, detail="AI feedback took too long. Please try again in a moment.") from exc
     except ValueError as exc:
+        logger.warning("open_feedback_parse_error question_id=%s error=%s", body.question_id, str(exc))
         raise HTTPException(status_code=502, detail="Failed to parse AI feedback — please try again") from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("open_feedback_generation_failed question_id=%s", body.question_id)

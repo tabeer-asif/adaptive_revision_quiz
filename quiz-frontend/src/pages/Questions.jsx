@@ -31,26 +31,36 @@ import {
   Chip,
   LinearProgress,
   IconButton,
+  Tooltip,
 } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { useNavigate } from "react-router-dom";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const API_URL = process.env.REACT_APP_API_URL;
 const QUESTION_TYPES = ["MCQ", "MULTI_MCQ", "NUMERIC", "SHORT", "OPEN"];
+// Bloom-aligned weights per difficulty level. 0.0 = incompatible at that level.
 const TYPE_DIFFICULTY_WEIGHTS = {
-  MCQ: [1.8, 1.6, 1.2, 0.9, 0.7],
-  SHORT: [1.6, 1.4, 1.1, 0.9, 0.8],
-  NUMERIC: [0.9, 1.1, 1.4, 1.2, 1.0],
-  MULTI_MCQ: [0.8, 1.0, 1.2, 1.4, 1.5],
-  OPEN: [0.4, 0.6, 1.0, 1.5, 1.8],
+  MCQ:       [1.8, 1.6, 1.2, 0.0, 0.0],
+  SHORT:     [1.6, 1.4, 1.2, 0.4, 0.0],
+  NUMERIC:   [0.8, 1.2, 1.4, 1.2, 1.0],
+  MULTI_MCQ: [0.0, 0.4, 1.2, 1.4, 1.6],
+  OPEN:      [0.0, 0.0, 0.8, 1.6, 1.8],
 };
 const TYPE_BLOOM_MAP = {
   MCQ: "Remember/Understand - recognition and basic interpretation",
-  MULTI_MCQ: "Understand/Analyze - evaluate each option",
+  MULTI_MCQ: "Understand/Analyse - evaluate each option",
   NUMERIC: "Apply - execute method or formula",
   SHORT: "Remember/Understand - recall without options",
-  OPEN: "Evaluate/Create - justify, critique, synthesize",
+  OPEN: "Evaluate/Create - justify, critique, synthesise",
+};
+const TYPE_INFO_MAP = {
+  MCQ: "Single correct option from multiple choices.",
+  MULTI_MCQ: "Multiple correct options can be selected.",
+  NUMERIC: "Answer is a number, checked within a tolerance range.",
+  SHORT: "Brief free text response, requiring a short phrase at most.",
+  OPEN: "Long form response requiring explanation or reasoning.",
 };
 const FILTER_CONTROL_HEIGHT = 56; // px — keeps all filter-row controls the same height
 
@@ -102,43 +112,41 @@ const allocateTypeCounts = (selectedTypes, count, difficulty) => {
   const ordered = QUESTION_TYPES.filter((t) => selectedTypes.includes(t));
   if (!ordered.length || count <= 0) return {};
 
+  const diffIdx = Math.max(0, Math.min(4, Number(difficulty) - 1));
+  const weights = Object.fromEntries(
+    ordered.map((t) => [t, TYPE_DIFFICULTY_WEIGHTS[t][diffIdx]])
+  );
+  const eligible = ordered.filter((t) => weights[t] > 0);
+
   const counts = Object.fromEntries(ordered.map((t) => [t, 0]));
-  const guaranteed = count >= ordered.length ? ordered.length : 0;
+  if (!eligible.length) return counts;
+
+  const guaranteed = count >= eligible.length ? eligible.length : 0;
   if (guaranteed > 0) {
-    ordered.forEach((t) => {
-      counts[t] = 1;
-    });
+    eligible.forEach((t) => { counts[t] = 1; });
   }
 
   const remaining = count - guaranteed;
   if (remaining <= 0) return counts;
 
-  const diffIdx = Math.max(0, Math.min(4, Number(difficulty) - 1));
-  const weights = Object.fromEntries(
-    ordered.map((t) => [t, TYPE_DIFFICULTY_WEIGHTS[t][diffIdx]])
-  );
-  const weightSum = Object.values(weights).reduce((a, b) => a + b, 0) || ordered.length;
-
+  const weightSum = eligible.reduce((a, t) => a + weights[t], 0) || eligible.length;
   const rawAlloc = Object.fromEntries(
-    ordered.map((t) => [t, remaining * (weights[t] / weightSum)])
+    eligible.map((t) => [t, remaining * (weights[t] / weightSum)])
   );
   const floored = Object.fromEntries(
-    ordered.map((t) => [t, Math.floor(rawAlloc[t])])
+    eligible.map((t) => [t, Math.floor(rawAlloc[t])])
   );
 
-  ordered.forEach((t) => {
-    counts[t] += floored[t];
-  });
+  eligible.forEach((t) => { counts[t] += floored[t]; });
 
-  const used = ordered.reduce((sum, t) => sum + floored[t], 0);
+  const used = eligible.reduce((sum, t) => sum + floored[t], 0);
   const leftovers = remaining - used;
   if (leftovers > 0) {
-    const ranked = [...ordered].sort((a, b) => {
+    const ranked = [...eligible].sort((a, b) => {
       const fracDiff = (rawAlloc[b] - floored[b]) - (rawAlloc[a] - floored[a]);
       if (fracDiff !== 0) return fracDiff;
       return QUESTION_TYPES.indexOf(a) - QUESTION_TYPES.indexOf(b);
     });
-
     for (let i = 0; i < leftovers; i += 1) {
       counts[ranked[i]] += 1;
     }
@@ -168,8 +176,6 @@ const createInitialFormState = () => ({
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
 
-// Parses the raw `due` string from the API into a Date object.
-// Timezone-naive strings are treated as UTC to avoid local-time shifts.
 const parseDueDate = (due) => {
   if (!due) return null;
 
@@ -189,6 +195,27 @@ const parseDueDate = (due) => {
 const isDueNow = (due) => {
   const parsed = parseDueDate(due);
   return parsed ? parsed.getTime() <= Date.now() : false;
+};
+
+// Uploads a file to Supabase Storage and calls back with the resulting URL.
+const uploadQuestionImage = async (file, token, { onStart, onUrl, onError, onFinally } = {}) => {
+  onStart?.();
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch(`${API_URL}/uploads/question-image`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Upload failed");
+    onUrl?.(data.image_url);
+  } catch (err) {
+    onError?.(err.message || "Image upload failed");
+  } finally {
+    onFinally?.();
+  }
 };
 
 function Questions() {
@@ -236,8 +263,7 @@ function Questions() {
   const [aiReviewTopicError, setAiReviewTopicError] = useState("");
   const [aiCreatingReviewTopic, setAiCreatingReviewTopic] = useState(false);
   const [aiSelectedTypes, setAiSelectedTypes] = useState(new Set());
-  // Difficulty distribution: {1: 0, 2: 2, 3: 5, 4: 3, 5: 0}
-  const [aiDifficultyDistribution, setAiDifficultyDistribution] = useState({ 1: 0, 2: 0, 3: 5, 4: 0, 5: 0 });
+  const [aiDifficultyDistribution, setAiDifficultyDistribution] = useState({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiError, setAiError] = useState("");
   const [aiGeneratedQuestions, setAiGeneratedQuestions] = useState([]);
@@ -282,10 +308,11 @@ function Questions() {
       };
     })
     .filter((entry) => entry.requested > 0);
+  const hasCompatibleGenerationPlan = plannedTypeSplitByDifficulty.some(({ split }) =>
+    Object.values(split).some((allocatedCount) => allocatedCount > 0)
+  );
 
   const token = localStorage.getItem("token");
-
-  // ─── API fetch helpers ────────────────────────────────────────────────────
 
   // Fetches the full question list with FSRS card data merged in (due date, last review, etc.).
   const fetchQuestions = useCallback(async () => {
@@ -324,29 +351,26 @@ function Questions() {
     setSelectedQuestionIds([]);
   }, [fetchQuestions]);
 
-  // ─── Image upload ─────────────────────────────────────────────────────────
 
-  // Uploads a file to Supabase Storage via the backend and stores the returned URL in form state.
-  const handleImageUpload = async (file) => {
-    updateQuestionForm("imageUploading", true);
-    setFormError("");
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch(`${API_URL}/uploads/question-image`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Upload failed");
-      updateQuestionForm("image_url", data.image_url);
-    } catch (err) {
-      setFormError(err.message || "Image upload failed");
-    } finally {
-      updateQuestionForm("imageUploading", false);
-    }
-  };
+
+  // Uploads a file and stores the returned URL in the drawer form state.
+  const handleImageUpload = (file) =>
+    uploadQuestionImage(file, token, {
+      onStart:   () => { updateQuestionForm("imageUploading", true); setFormError(""); },
+      onUrl:     (url) => updateQuestionForm("image_url", url),
+      onError:   (msg) => setFormError(msg),
+      onFinally: () => updateQuestionForm("imageUploading", false),
+    });
+
+  // Uploads a file for a specific AI-review question, storing uploading state by _key.
+  const [aiQuestionUploading, setAiQuestionUploading] = useState({});
+  const handleAiQuestionImageUpload = (key, file) =>
+    uploadQuestionImage(file, token, {
+      onStart:   () => setAiQuestionUploading((prev) => ({ ...prev, [key]: true })),
+      onUrl:     (url) => updateAiQuestion(key, { image_url: url }),
+      onError:   (msg) => setAiSaveError(msg),
+      onFinally: () => setAiQuestionUploading((prev) => ({ ...prev, [key]: false })),
+    });
 
   // ─── Topic creation ───────────────────────────────────────────────────────
 
@@ -487,9 +511,8 @@ function Questions() {
     });
   };
 
-  // ─── SHORT answer keyword management ───────────────────────────────────
+  //  SHORT answer keyword management 
 
-  // Updates a keyword at a given index.
   const handleKeywordChange = (index, value) => {
     setQuestionForm((prev) => {
       const nextKeywords = [...prev.keywords];
@@ -498,7 +521,6 @@ function Questions() {
     });
   };
 
-  // Appends an empty keyword input.
   const addKeyword = () => {
     setQuestionForm((prev) => ({
       ...prev,
@@ -506,7 +528,6 @@ function Questions() {
     }));
   };
 
-  // Removes a keyword. Minimum of 1 keyword is enforced.
   const removeKeyword = (index) => {
     setQuestionForm((prev) => {
       if (prev.keywords.length <= 1) {
@@ -552,7 +573,7 @@ function Questions() {
 
   // ─── Edit: question → form state mapping ────────────────────────────────
 
-  // Converts a raw API question object into the shape expected by the drawer form.
+  // Converts a API question object into the shape expected by the drawer form.
   // Handles varied option formats (array vs object), normalises answers, and
   // converts numeric values to strings for controlled inputs.
   const mapQuestionToFormState = (question) => {
@@ -912,7 +933,7 @@ function Questions() {
     setAiReviewTopicError("");
     setAiCreatingReviewTopic(false);
     setAiSelectedTypes(new Set());
-    setAiDifficultyDistribution({ 1: 0, 2: 0, 3: 5, 4: 0, 5: 0 });
+    setAiDifficultyDistribution({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
     setAiError("");
     setAiGeneratedQuestions([]);
     setAiWarnings([]);
@@ -970,7 +991,8 @@ function Questions() {
   };
 
   const handleCreateTopicInAiReview = async (nameOverride = null) => {
-    const name = (nameOverride !== null ? nameOverride : aiReviewTopicName).trim();
+    const rawName = typeof nameOverride === "string" ? nameOverride : aiReviewTopicName;
+    const name = String(rawName || "").trim();
     if (!name) {
       setAiReviewTopicError("Topic name cannot be empty");
       return;
@@ -1018,6 +1040,13 @@ function Questions() {
     const totalCount = Object.values(aiDifficultyDistribution).reduce((a, b) => a + b, 0);
     if (totalCount === 0) {
       setAiError("Please select at least one question to generate.");
+      return;
+    }
+
+    if (!hasCompatibleGenerationPlan) {
+      setAiError(
+        "Selected question types are incompatible with the chosen difficulty levels. Adjust types or difficulty counts to continue."
+      );
       return;
     }
 
@@ -1922,6 +1951,9 @@ function Questions() {
                         label={
                           <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
                             <span>{type}</span>
+                            <Tooltip title={TYPE_INFO_MAP[type]} arrow>
+                              <InfoOutlinedIcon sx={{ fontSize: 16, color: "text.secondary" }} />
+                            </Tooltip>
                             {aiFeasibilityLoading && (
                               <Typography variant="caption" color="text.disabled">scoring…</Typography>
                             )}
@@ -1957,16 +1989,27 @@ function Questions() {
                     </Alert>
                   ) : null;
                 })()}
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                <Box sx={{ mt: 1 }}>
                   {aiFileFeasibility?.scores && (
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                       Scores are AI-assessed suitability from the uploaded document.
                     </Typography>
                   )}
-                  Split logic: for each selected difficulty, total questions are auto-allocated across checked types.
-                  Lower difficulty leans toward MCQ/SHORT, higher difficulty leans toward MULTI_MCQ/OPEN,
-                  and NUMERIC is emphasized around medium difficulty.
-                </Typography>
+
+                  <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
+                    How are questions distributed?
+                  </Typography>
+
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.25 }}>
+                    Levels 1-2: Mostly MCQ and SHORT answer questions, focused on recall and recognition.
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.25 }}>
+                    Level 3: A mixture of all question types.
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Levels 4-5: More MULTI_MCQ and OPEN questions, focused on higher levels of thinking and analysis
+                  </Typography>
+                </Box>
                 <Box sx={{ mt: 1, display: "flex", flexWrap: "wrap", gap: 0.75 }}>
                   {QUESTION_TYPES.filter((type) => aiSelectedTypes.has(type)).map((type) => (
                     <Chip key={type} size="small" variant="outlined" label={`${type}: ${TYPE_BLOOM_MAP[type]}`} />
@@ -1999,31 +2042,55 @@ function Questions() {
                 </Typography>
               </Box>
 
-              {orderedSelectedTypes.length > 0 && plannedTypeSplitByDifficulty.length > 0 && (
-                <Box sx={{ p: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                    Planned Split Preview
-                  </Typography>
-                  {plannedTypeSplitByDifficulty.map(({ level, requested, split }) => (
-                    <Box key={level} sx={{ mb: 1 }}>
-                      <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
-                        Difficulty L{level}: {requested} question{requested === 1 ? "" : "s"}
-                      </Typography>
-                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
-                        {orderedSelectedTypes
-                          .filter((type) => (split[type] || 0) > 0)
-                          .map((type) => (
-                            <Chip
-                              key={`${level}-${type}`}
-                              size="small"
-                              variant="outlined"
-                              label={`${type}: ${split[type]}`}
-                            />
-                          ))}
+              {orderedSelectedTypes.length > 0 && plannedTypeSplitByDifficulty.length > 0 && (() => {
+                const diffIdx = (level) => Math.max(0, Math.min(4, level - 1));
+                const incompatible = orderedSelectedTypes.flatMap((type) =>
+                  plannedTypeSplitByDifficulty
+                    .filter(({ level }) => TYPE_DIFFICULTY_WEIGHTS[type][diffIdx(level)] === 0)
+                    .map(({ level }) => ({ type, level }))
+                );
+                return (
+                  <Box sx={{ p: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+                    <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                      Planned Split Preview
+                    </Typography>
+                    {incompatible.length > 0 && (
+                      <Alert severity="warning" sx={{ mb: 1.5 }}>
+                        {incompatible.map(({ type, level }) => `${type} at L${level}`).join(", ")} will be
+                        excluded - {incompatible.length === 1 ? "this combination is" : "these combinations are"} not
+                        compatible with the selected difficulty
+                        {incompatible.length === 1 ? " level" : " levels"} (OPEN requires higher order thinking;
+                        L1–L2 targets basic recall). Questions will be redistributed across the remaining selected types.
+                      </Alert>
+                    )}
+                    {plannedTypeSplitByDifficulty.map(({ level, requested, split }) => (
+                      <Box key={level} sx={{ mb: 1 }}>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                          Difficulty L{level}: {requested} question{requested === 1 ? "" : "s"}
+                        </Typography>
+                        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+                          {orderedSelectedTypes
+                            .filter((type) => (split[type] || 0) > 0)
+                            .map((type) => (
+                              <Chip
+                                key={`${level}-${type}`}
+                                size="small"
+                                variant="outlined"
+                                label={`${type}: ${split[type]}`}
+                              />
+                            ))}
+                        </Box>
                       </Box>
-                    </Box>
-                  ))}
-                </Box>
+                    ))}
+                  </Box>
+                );
+              })()}
+
+              {!hasCompatibleGenerationPlan && orderedSelectedTypes.length > 0 && plannedTypeSplitByDifficulty.length > 0 && (
+                <Alert severity="error">
+                  None of the selected question types can be generated for the chosen difficulty levels.
+                  Please change either question types or difficulty distribution.
+                </Alert>
               )}
 
               {aiGenerating && (
@@ -2307,6 +2374,56 @@ function Questions() {
                                 }
                               />
                             )}
+
+                            <TextField
+                              label="Explanation"
+                              fullWidth
+                              multiline
+                              minRows={2}
+                              size="small"
+                              value={q.explanation ?? ""}
+                              onChange={(e) => updateAiQuestion(q._key, { explanation: e.target.value })}
+                              helperText="Optional: edit the explanation shown with this question."
+                            />
+
+                            {/* ── Image upload (edit mode) ── */}
+                            <Box>
+                              <Button
+                                variant="outlined"
+                                component="label"
+                                size="small"
+                                disabled={aiQuestionUploading[q._key]}
+                              >
+                                {aiQuestionUploading[q._key] ? "Uploading…" : "Attach Image"}
+                                <input
+                                  type="file"
+                                  accept="image/jpeg,image/png,image/webp,image/gif"
+                                  hidden
+                                  onChange={(e) => {
+                                    const f = e.target.files?.[0];
+                                    if (f) handleAiQuestionImageUpload(q._key, f);
+                                    e.target.value = "";
+                                  }}
+                                />
+                              </Button>
+                              {q.image_url && (
+                                <Box sx={{ mt: 1 }}>
+                                  <img
+                                    src={q.image_url}
+                                    alt="Question preview"
+                                    style={{ maxWidth: "100%", maxHeight: 140, borderRadius: 4, display: "block" }}
+                                  />
+                                  <Button
+                                    size="small"
+                                    color="error"
+                                    sx={{ mt: 0.5 }}
+                                    onClick={() => updateAiQuestion(q._key, { image_url: null })}
+                                  >
+                                    Remove image
+                                  </Button>
+                                </Box>
+                              )}
+                            </Box>
                           </Stack>
                         ) : (
                           <>
@@ -2338,6 +2455,17 @@ function Questions() {
                               <Typography variant="body2" component="div" color="text.secondary" sx={{ mt: 0.5 }}>
                                 Explanation: <MathText text={q.explanation} />
                               </Typography>
+                            )}
+
+                            {/* ── Image (view mode) ── */}
+                            {q.image_url && (
+                              <Box sx={{ mt: 1 }}>
+                                <img
+                                  src={q.image_url}
+                                  alt="Question"
+                                  style={{ maxWidth: "100%", maxHeight: 140, borderRadius: 4, display: "block" }}
+                                />
+                              </Box>
                             )}
                           </>
                         )}
@@ -2381,7 +2509,13 @@ function Questions() {
               <Button
                 variant="contained"
                 onClick={handleAiGenerate}
-                disabled={aiGenerating || !aiFile || aiSelectedTypes.size === 0 || Object.values(aiDifficultyDistribution).reduce((a, b) => a + b, 0) === 0}
+                disabled={
+                  aiGenerating
+                  || !aiFile
+                  || aiSelectedTypes.size === 0
+                  || Object.values(aiDifficultyDistribution).reduce((a, b) => a + b, 0) === 0
+                  || !hasCompatibleGenerationPlan
+                }
               >
                 {aiGenerating ? "Generating…" : "Generate Questions"}
               </Button>
@@ -2408,6 +2542,3 @@ function Questions() {
 }
 
 export default Questions;
-
-// add difficulty indicators
-// review now button for due questions
