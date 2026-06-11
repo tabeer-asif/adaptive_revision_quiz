@@ -16,7 +16,7 @@ router = APIRouter(prefix="/explanations", tags=["explanations"])
 @router.post("/explain", response_model=ExplanationResponse)
 async def explain_answer(body: ExplanationRequest, user=Depends(get_current_user)):
     """
-    On-demand post-answer explanation.
+    On demand post answer explanation.
     Called when the user clicks "Explain this" after submitting an answer.
     Personalised to their ability level (theta) and recent accuracy.
     """
@@ -104,7 +104,7 @@ async def chat_about_question(body: ChatRequest, user=Depends(get_current_user))
     if not settings.AI_ENABLED or not settings.GEMINI_API_KEY:
         raise HTTPException(503, "AI features are not enabled.")
 
-    # ── 1. Fetch question ──────────────────────────────────────────────
+    # Fetch question 
     q_res = supabase_db.table("questions") \
         .select("text, type, options, answer, keywords, topic_id") \
         .eq("id", body.question_id) \
@@ -116,11 +116,11 @@ async def chat_about_question(body: ChatRequest, user=Depends(get_current_user))
 
     question = q_res.data
 
-    # ── 2. Verify topic consistency ────────────────────────────────────
+    # 2. Verify topic consistency 
     if question.get("topic_id") != body.topic_id:
         raise HTTPException(400, "topic_id does not match the question's topic.")
 
-    # ── 3. Fetch theta for personalisation ─────────────────────────────
+    # 3. Fetch theta for personalisation 
     theta_res = supabase_db.table("user_topic_theta") \
         .select("theta") \
         .eq("user_id", str(user.id)) \
@@ -129,7 +129,6 @@ async def chat_about_question(body: ChatRequest, user=Depends(get_current_user))
 
     theta = theta_res.data[0]["theta"] if theta_res.data else 0.0
 
-    # ── 4. Generate reply ──────────────────────────────────────────────
     try:
         from app.services.ai import generate_chat_reply
         reply = await generate_chat_reply(

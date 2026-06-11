@@ -641,7 +641,12 @@ function Quiz() {
   };
 
   const confirmExitQuiz = async () => {
-    requestSessionClose("user_quit");
+    // Mark session as closed in refs so background effects don't re-trigger it,
+    // but do NOT call requestSessionClose (which fires void endSession and discards
+    // the response). We call endSession ourselves below so we can await the result
+    // and pass the feedback to the Results page.
+    sessionCloseRequestedRef.current = true;
+    sessionCloseReasonRef.current = "user_quit";
     const endedSession = await endSession("user_quit");
     const backendAnswered = Number(endedSession?.questions_answered);
     const total = Number.isFinite(backendAnswered) ? backendAnswered : questionCount;
@@ -717,7 +722,7 @@ function Quiz() {
   }
 
   const progress = (feedback || awaitingOpenRating) ? 100 : 0;
-    const openAnswerLength = String(selectedOption || "").trim().length;
+    const openAnswerLength = String(selectedOption || "").length;
     const openRemainingChars = Math.max(0, OPEN_MIN_ANSWER_LENGTH - openAnswerLength);
 
   const feedbackSeverity = feedback.includes("Correct")
@@ -804,7 +809,7 @@ function Quiz() {
               <Button
                 variant="outlined"
                 fullWidth
-                onClick={handleSelfMark}
+                onClick={() => handleSelfMark()}
                 disabled={isSubmitDisabled() || openAnswerLoading}
               >
                 {openSelfMarkLoading ? "Saving..." : "Self Mark"}
@@ -812,7 +817,7 @@ function Quiz() {
               <Button
                 variant="contained"
                 fullWidth
-                onClick={handlePersonalisedFeedback}
+                onClick={() => handlePersonalisedFeedback()}
                 disabled={isSubmitDisabled() || openAnswerLoading}
               >
                 {openFeedbackLoading ? "Getting feedback..." : "Want personalised feedback"}

@@ -172,10 +172,13 @@ async def end_session(session_id: int, payload: EndSessionRequest | None = None,
         feedback_payload = None
         if session_row.get("feedback") is None:
             try:
+                logger.info("session_feedback_generation_attempt session_id=%s", session_id)
                 feedback_payload = await generate_session_feedback(
                     {**session_row, **metadata_update_payload},
                     user_id=user_id,
                 )
+                if feedback_payload:
+                    logger.info("session_feedback_generation_stored session_id=%s", session_id)
             except Exception:  # noqa: BLE001
                 logger.exception("session_feedback_generation_failed session_id=%s", session_id)
 
@@ -241,10 +244,13 @@ async def end_session(session_id: int, payload: EndSessionRequest | None = None,
 
     feedback_payload = None
     try:
+        logger.info("session_feedback_generation_attempt session_id=%s", session_id)
         feedback_payload = await generate_session_feedback(
             {**updated_row, "started_at": session_row.get("started_at")},
             user_id=user_id,
         )
+        if feedback_payload:
+            logger.info("session_feedback_generation_stored session_id=%s", session_id)
     except Exception:  # noqa: BLE001
         logger.exception("session_feedback_generation_failed session_id=%s", session_id)
 

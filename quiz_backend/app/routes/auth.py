@@ -12,7 +12,7 @@ def register(user: dict):
     full_name = f"{first_name} {surname}".strip()
     role = user.get("role", "student")  # default role
 
-    # 1️⃣ Sign up user in Supabase Auth
+    # Sign up user in Supabase Auth
     res = supabase_auth.auth.sign_up({
         "email": email,
         "password": password

@@ -42,6 +42,13 @@ def answers_differ(a, b) -> bool:
         return a != b
 
 
+def normalize_optional_explanation(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return value
+    cleaned = value.strip()
+    return cleaned if cleaned else None
+
+
 def _extract_storage_path(image_url: str) -> str | None:
     if not image_url:
         return None
@@ -91,12 +98,14 @@ def create_question(payload: CreateQuestionRequest, user=Depends(get_current_use
         irt_thresholds = None  # not applicable for other types
 
     # 3. Build DB object
+    explanation_input = normalize_optional_explanation(payload.explanation)
+
     normalized_text, normalized_options, normalized_answer, normalized_explanation = normalize_question_math_fields(
         payload.type,
         payload.text,
         payload.options,
         payload.answer,
-        payload.explanation,
+        explanation_input,
     )
 
     question_data = {
@@ -168,13 +177,21 @@ def update_question(question_id: int, payload: CreateQuestionRequest, user=Depen
     else:
         irt_thresholds = None
 
+    has_explanation_field = "explanation" in payload.model_fields_set
+    normalized_payload_explanation = normalize_optional_explanation(payload.explanation)
+    explanation_for_update = (
+        normalized_payload_explanation
+        if has_explanation_field
+        else q.data.get("explanation")
+    )
+
     question_data = {
         "topic_id": payload.topic_id,
         "text": payload.text,
         "type": payload.type,
         "options": payload.options,
         "answer": payload.answer,
-        "explanation": payload.explanation if payload.explanation is not None else q.data.get("explanation"),
+        "explanation": explanation_for_update,
         "difficulty": payload.difficulty,
         "irt_a": payload.irt_a if payload.irt_a is not None else irt_defaults["irt_a"],
         "irt_b": payload.irt_b if payload.irt_b is not None else irt_defaults["irt_b"],

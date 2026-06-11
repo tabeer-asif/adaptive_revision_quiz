@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from app.dependencies.auth import get_current_user
 from app.supabase_client import supabase_db
 from datetime import datetime, timezone
+import json
 from app.schemas.quiz import SubmitAnswerRequest
 from fsrs import Card, Rating, Scheduler, State
 from app.services.irt import (
@@ -59,6 +60,37 @@ def format_correct_answer(question_type, db_answer, options):
         return ", ".join(labels)
 
     return "" if db_answer is None else str(db_answer)
+
+
+def _normalize_short_keywords(raw_keywords) -> list[str]:
+    if raw_keywords is None:
+        return []
+
+    parsed = raw_keywords
+    if isinstance(raw_keywords, str):
+        try:
+            parsed = json.loads(raw_keywords)
+        except Exception:
+            parsed = [raw_keywords]
+
+    if not isinstance(parsed, list):
+        parsed = [parsed]
+
+    normalized = []
+    for item in parsed:
+        text = str(item).strip().lower()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _normalize_short_model_answer(raw_answer) -> str:
+    if raw_answer is None:
+        return ""
+    text = str(raw_answer).strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        text = text[1:-1]
+    return text.strip().lower()
 
 
 def _increment_session_attempt_count(session_id: int, user_id: str):
@@ -122,10 +154,10 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
     
     # -----------------------------
     # 2. Score the answer per question type:
-    #    MCQ/NUMERIC  → binary exact/tolerance match
-    #    MULTI_MCQ    → penalised partial credit
-    #    SHORT        → fuzzy keyword matching (rapidfuzz)
-    #    OPEN         → user self-rating (1–4)
+    #    MCQ/NUMERIC   binary exact/tolerance match
+    #    MULTI_MCQ     penalised partial credit
+    #    SHORT         fuzzy keyword matching (rapidfuzz)
+    #    OPEN          user self-rating (1–4)
     # -----------------------------
 
     validate_answer_submitted(selected_option)
@@ -161,9 +193,8 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
 
     elif question_type == "SHORT":
         submitted_text = validate_short_text(selected_option)
-        model_answer = str(db_answer).strip().lower() if db_answer is not None else ""
-        keywords = question.get("keywords") or []
-        normalized_keywords = [str(keyword).strip().lower() for keyword in keywords if str(keyword).strip()]
+        model_answer = _normalize_short_model_answer(db_answer)
+        normalized_keywords = _normalize_short_keywords(question.get("keywords"))
         correct, score = score_short(submitted_text, normalized_keywords, model_answer)
 
     elif question_type == "OPEN":
@@ -174,14 +205,14 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
                 "requires_self_rating": True,
                 "correct_answer": model_answer,
             }
-        correct = self_rating >= 3 # rely on user's self-assessment for open-ended questions
+        correct = self_rating >= 3 # rely on user's self-assessment for open ended questions
         score = float(self_rating) / 4.0
         
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported question type: {question_type}")
     
     # -----------------------------
-    # 3. Fetch existing FSRS card for this user & question (if any) FINE
+    # 3. Fetch existing FSRS card for this user & question (if any) 
     # -----------------------------
     card_resp = supabase_db.table("fsrs_cards") \
         .select("*") \
@@ -208,19 +239,43 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
     # 4. Update FSRS card based on user's answer
     # -----------------------------
 
-   
-    
-    # rating = Rating.Good if correct else Rating.Again
+    response_history_resp = supabase_db.table("review_logs") \
+        .select("question_id, response_time, questions!inner(type)") \
+        .eq("user_id", user_id) \
+        .execute()
+
+    question_response_times = []
+    type_response_times = []
+    for row in (response_history_resp.data or []):
+        response_value = row.get("response_time")
+        if not isinstance(response_value, (int, float)):
+            continue
+
+        response_value = float(response_value)
+        if row.get("question_id") == question_id:
+            question_response_times.append(response_value)
+
+        related_question = row.get("questions") or {}
+        if related_question.get("type") == question_type:
+            type_response_times.append(response_value)
+
     if question_type == "OPEN":
-        rating = Rating(self_rating)  # convert int → Rating enum
+        rating = Rating(self_rating)
     else:
-        rating = get_fsrs_rating(question_type, correct, response_time, score=score)
+        rating = get_fsrs_rating(
+            question_type,
+            correct,
+            response_time,
+            score=score,
+            question_response_times=question_response_times,
+            type_response_times=type_response_times,
+        )
 
 
-    # 5️⃣ Review card (Scheduler updates intervals/stability/difficulty)
+    # 5. Review card (Scheduler updates intervals/stability/difficulty)
     card, _interval = scheduler.review_card(card, rating)
     
-    # 6️⃣ Save FSRS card state back to DB
+    # 6. Save FSRS card state back to DB
     supabase_db.table("fsrs_cards").upsert({
         "user_id": user_id,
         "question_id": question_id,
@@ -282,7 +337,7 @@ def submit_answer(request: SubmitAnswerRequest, user=Depends(get_current_user)):
     # Only count fully committed answers.
     # OPEN questions have a two-phase flow: first submit returns requires_self_rating=True
     # and does not yet produce a final answer; the second submit (with self_rating) does.
-    # We must not increment on the first phase to avoid double-counting.
+    # We must not increment on the first phase to avoid double counting.
     _answer_is_committed = not (
         question_type == "OPEN" and self_rating is None
     )

@@ -13,8 +13,6 @@ from nltk.corpus import stopwords
 
 logger = logging.getLogger(__name__)
 
-# Corpus is pre-downloaded during the build step (nixpacks.toml).
-# Fallback download covers local dev environments that lack the data.
 try:
     stopwords.words('english')
 except LookupError:
@@ -27,12 +25,14 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 TYPE_ORDER = ["MCQ", "MULTI_MCQ", "NUMERIC", "SHORT", "OPEN"]
 
 # Bloom aligned weights by difficulty (1-5). Higher weight means more questions allocated.
+# A weight of 0.0 indicates  type is incompatible with that difficulty level.
 TYPE_DIFFICULTY_WEIGHTS = {
-    "MCQ": [1.8, 1.6, 1.2, 0.9, 0.7],
-    "SHORT": [1.6, 1.4, 1.1, 0.9, 0.8],
-    "NUMERIC": [0.9, 1.1, 1.4, 1.2, 1.0],
-    "MULTI_MCQ": [0.8, 1.0, 1.2, 1.4, 1.5],
-    "OPEN": [0.4, 0.6, 1.0, 1.5, 1.8],
+
+  "MCQ":       [1.8, 1.6, 1.2, 0.0, 0.0],
+  "SHORT":     [1.6, 1.4, 1.2, 0.4, 0.0],
+  "NUMERIC":   [0.8, 1.2, 1.4, 1.2, 1.0],
+  "MULTI_MCQ": [0.0, 0.4, 1.2, 1.4, 1.6],
+  "OPEN":      [0.0, 0.0, 0.8, 1.6, 1.8],
 }
 
 SHORT_KEYWORD_STOPWORDS = STOP_WORDS_EN
@@ -300,31 +300,35 @@ def allocate_type_counts(selected_types, count: int, difficulty: int):
     if not ordered:
         return {}
 
-    # If count is enough, guarantee at least one per selected type.
+    diff_idx = max(0, min(4, difficulty - 1))
+    weights = {t: TYPE_DIFFICULTY_WEIGHTS.get(t, [1, 1, 1, 1, 1])[diff_idx] for t in ordered}
+    # Only types with a non-zero weight are eligible at this difficulty level.
+    eligible = [t for t in ordered if weights[t] > 0]
+
     counts = {t: 0 for t in ordered}
-    guaranteed = len(ordered) if count >= len(ordered) else 0
+    if not eligible:
+        return counts
+
+    guaranteed = len(eligible) if count >= len(eligible) else 0
     if guaranteed:
-        for t in ordered:
+        for t in eligible:
             counts[t] = 1
 
     remaining = count - guaranteed
     if remaining <= 0:
         return counts
 
-    diff_idx = max(0, min(4, difficulty - 1))
-    weights = {t: TYPE_DIFFICULTY_WEIGHTS.get(t, [1, 1, 1, 1, 1])[diff_idx] for t in ordered}
-    weight_sum = sum(weights.values()) or float(len(ordered))
+    weight_sum = sum(weights[t] for t in eligible) or float(len(eligible))
+    raw_alloc = {t: remaining * (weights[t] / weight_sum) for t in eligible}
+    floored = {t: int(raw_alloc[t]) for t in eligible}
 
-    raw_alloc = {t: remaining * (weights[t] / weight_sum) for t in ordered}
-    floored = {t: int(raw_alloc[t]) for t in ordered}
-
-    for t in ordered:
+    for t in eligible:
         counts[t] += floored[t]
 
     leftovers = remaining - sum(floored.values())
     if leftovers > 0:
         ranked = sorted(
-            ordered,
+            eligible,
             key=lambda t: (raw_alloc[t] - floored[t], -TYPE_ORDER.index(t)),
             reverse=True,
         )
