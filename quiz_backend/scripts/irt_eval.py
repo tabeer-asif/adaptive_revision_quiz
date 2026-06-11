@@ -1,17 +1,3 @@
-"""
-IRT / EAP adaptive engine evaluation.
-
-Reads review_logs.csv and questions.csv from the workspace root and
-produces three printed analysis sections plus a five-panel figure saved
-as irt_evaluation.png in the working directory.
-
-Run from the workspace root:
-    python quiz_backend/scripts/irt_evaluation.py
-
-Or from inside quiz_backend/:
-    python scripts/irt_evaluation.py
-"""
-
 from __future__ import annotations
 
 import os
@@ -50,6 +36,8 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
 
     users = sorted(df["user_id"].unique())
     id_map = {u: f"P{i + 1}" for i, u in enumerate(users)}
+    if len(users) >= 5:
+        id_map[users[3]], id_map[users[4]] = id_map[users[4]], id_map[users[3]]
     df["participant"] = df["user_id"].map(id_map)
 
     topics = sorted(df["topic_id"].unique())
@@ -337,7 +325,6 @@ def plot_results(
     print(f"Saved: {POSTERIOR_SD_OUTPUT_PATH}")
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
 
 def main() -> None:
     df, _questions = load_data()
