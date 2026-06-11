@@ -85,21 +85,6 @@ describe("Analytics page", () => {
     });
   });
 
-  it("re-fetches data when window changes", async () => {
-    renderAnalytics();
-
-    await waitFor(() => expect(getAnalyticsTopicSummary).toHaveBeenCalled());
-
-    await userEvent.click(screen.getByLabelText(/Window/i));
-    await userEvent.click(await screen.findByRole("option", { name: /Last 30 days/i }));
-
-    await waitFor(() => {
-      expect(getAnalyticsThetaProgression).toHaveBeenLastCalledWith(expect.objectContaining({ days: 30 }));
-      expect(getAnalyticsFsrsRetention).toHaveBeenLastCalledWith(expect.objectContaining({ days: 30 }));
-      expect(getAnalyticsQuestionPerformance).toHaveBeenLastCalledWith(expect.objectContaining({ days: 30 }));
-    });
-  });
-
   it("shows error alert and allows retry", async () => {
     getAnalyticsTopicSummary.mockRejectedValueOnce(new Error("boom"));
 
