@@ -1224,7 +1224,7 @@ async def generate_session_feedback(
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError as exc:
-        logger.warning("gemini_session_feedback_timeout session_id=%s elapsed=%.1fs timeout=%.1fs", session_id, elapsed, timeout_seconds)
+        logger.warning("gemini_session_feedback_timeout session_id=%s timeout=%.1fs", session_id, timeout_seconds)
         raise TimeoutError("AI session feedback generation timed out") from exc
 
     raw = str(getattr(response, "text", "") or "").strip()

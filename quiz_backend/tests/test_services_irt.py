@@ -66,6 +66,26 @@ def test_score_short_paths():
     assert score >= 0.6
 
 
+def test_score_short_matches_model_answer_variations():
+    ok, score = irt.score_short(
+        "Power battery",
+        ["battery power", "battery", "power", "energy"],
+        "battery power",
+    )
+    assert ok is True
+    assert score == 1.0
+
+
+def test_score_short_passes_on_any_keyword_variation():
+    ok, score = irt.score_short(
+        "battery",
+        ["battery power", "battery", "power", "energy"],
+        "battery power",
+    )
+    assert ok is True
+    assert score > 0.0
+
+
 def test_select_best_question_and_rating_paths():
     # Selection and FSRS rating helpers should cover both calibration and learning modes.
     questions = [
